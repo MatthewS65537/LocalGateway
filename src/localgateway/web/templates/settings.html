@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Settings — LocalGateway{% endblock %}
+{% set active_page = "settings" %}
+{% block content %}
+<section class="page">
+  <h1 class="page-title">Settings</h1>
+  <p class="page-sub">Gateway configuration, routing policy, and health probes.</p>
+
+  <div class="card">
+    <div class="card-head"><h2>Server</h2></div>
+    <div style="display:grid;gap:14px;max-width:400px">
+      <div>
+        <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Port</label>
+        <input type="number" id="settings-port" value="8080" min="1" max="65535" style="width:140px">
+        <div style="font-size:0.72rem;color:var(--text-dim);margin-top:4px">Restart required after changing port.</div>
+      </div>
+      <div>
+        <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Gateway API Key</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="password" id="settings-api-key" placeholder="(none — open access)" style="flex:1;min-width:180px;font-family:var(--font-mono)">
+          <button type="button" class="secondary" onclick="toggleApiKeyVisibility()">Show</button>
+          <button type="button" class="secondary" onclick="copyApiKey()">Copy</button>
+        </div>
+        <div style="font-size:0.72rem;color:var(--text-dim);margin-top:4px">Required as Bearer token for /v1 and /api/v1. Leave blank for no auth. Admin UI stays open locally.</div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button class="primary" onclick="saveServerSettings()">Save</button>
+        <button class="secondary" onclick="loadServerSettings()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Routing Policy</h2></div>
+    <div style="display:grid;gap:14px">
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+        <select id="settings-routing-mode" onchange="updateDecayViz()">
+          <option value="explore">Weighted explore (probabilistic tiers)</option>
+          <option value="failover">Strict failover (tier order only)</option>
+        </select>
+      </div>
+      <div id="decay-section">
+        <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Decay factor</label>
+        <div style="display:flex;align-items:center;gap:12px">
+          <input type="range" id="settings-routing-decay" min="0.1" max="0.9" step="0.05" value="0.4" style="width:200px" oninput="updateDecayViz()">
+          <span id="decay-value" style="font-family:var(--font-mono);font-size:0.9rem">0.40</span>
+        </div>
+        <div style="margin-top:12px">
+          <div style="font-size:0.72rem;color:var(--text-dim);margin-bottom:6px">Estimated traffic distribution by number of tiers</div>
+          <div id="decay-viz" style="display:grid;gap:8px;font-size:0.78rem"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button class="primary" onclick="saveRoutingSettings()">Save</button>
+        <button class="secondary" onclick="loadRoutingSettings()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Health Probes</h2></div>
+    <div style="display:grid;gap:14px">
+      <label style="display:flex;align-items:center;gap:10px;font-size:0.85rem;cursor:pointer">
+        <input type="checkbox" id="settings-probe-enabled" checked onchange="toggleProbeSettings()">
+        Enable periodic health probes
+      </label>
+      <div id="probe-options" style="display:grid;gap:14px">
+        <div>
+          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Probe interval</label>
+          <select id="settings-probe-interval" style="width:auto">
+            <option value="900">15 minutes</option>
+            <option value="1800">30 minutes</option>
+            <option value="3600" selected>1 hour</option>
+            <option value="21600">6 hours</option>
+            <option value="86400">24 hours</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Probe output tokens (for TPS estimate)</label>
+          <input type="number" id="settings-probe-max-tokens" value="64" min="8" max="1024" style="width:120px">
+          <div style="font-size:0.72rem;color:var(--text-dim);margin-top:4px">More tokens = better TPS accuracy, but higher probe cost.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button class="primary" onclick="saveProbeSettings()">Save</button>
+        <button class="secondary" onclick="loadProbeSettings()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Display</h2></div>
+    <div style="display:grid;gap:14px">
+      <label style="display:flex;align-items:center;gap:10px;font-size:0.85rem;cursor:pointer">
+        <input type="checkbox" id="settings-chart-enabled" checked>
+        Show throughput over time chart on model detail
+      </label>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button class="primary" onclick="saveDisplaySettings()">Save</button>
+        <button class="secondary" onclick="loadDisplaySettings()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="border-color:var(--danger)">
+    <div class="card-head" style="color:var(--danger)"><h2>Debug Tools</h2></div>
+    <p style="font-size:0.78rem;color:var(--text-dim);margin-bottom:16px">These actions are destructive. Use with caution.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="secondary" style="color:var(--danger);border-color:var(--danger)" onclick="clearUsageData()">Clear All Usage Data</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}

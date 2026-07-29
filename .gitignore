@@ -1,0 +1,32 @@
+# Project-specific
+cc_mnt/
+data/
+config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+coverage/
+.coverage
+htmlcov/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Plans (generated)
+plans/

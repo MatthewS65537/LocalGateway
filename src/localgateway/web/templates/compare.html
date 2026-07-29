@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Compare Models — LocalGateway{% endblock %}
+{% set active_page = "models" %}
+{% block content %}
+<section class="page">
+  <button class="secondary" style="margin-bottom:16px" onclick="location.href='/models'">← All models</button>
+  <h1 class="page-title">Compare Models</h1>
+  <p class="page-sub">Side-by-side specs, pricing, and 7-day performance.</p>
+  <div id="compare-loading" class="skeleton-block" style="height:200px;margin-top:16px"></div>
+  <div id="compare-error" class="empty-state hidden"></div>
+  <div id="compare-wrap" class="hidden" style="overflow-x:auto;margin-top:16px"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>window.__COMPARE_IDS__ = {{ ids|tojson }};</script>
+<script src="/static/js/compare.js"></script>
+{% endblock %}

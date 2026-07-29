@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Usage — LocalGateway{% endblock %}
+{% set active_page = "usage" %}
+{% block content %}
+<section class="page">
+  <h1 class="page-title">Usage</h1>
+  <p class="page-sub">Token usage and cost across providers and models.</p>
+
+  <div style="margin-bottom:16px">
+    <div class="seg" id="usage-range">
+      <button class="active" onclick="setUsageRange(24, this)">24h</button>
+      <button onclick="setUsageRange(168, this)">7d</button>
+      <button onclick="setUsageRange(720, this)">30d</button>
+    </div>
+  </div>
+
+  <div class="stat-strip" id="usage-stats">
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Requests</div></div>
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Input Tokens</div></div>
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Output Tokens</div></div>
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Reasoning Tokens</div></div>
+    <div class="stat-cell"><div class="stat-num accent">—</div><div class="stat-cap">Est. Cost</div></div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-head"><h2>By Provider</h2></div>
+      <table>
+        <thead><tr><th>Provider</th><th>Reqs</th><th>Tokens</th><th>Cached</th><th>Cost</th></tr></thead>
+        <tbody id="usage-provider"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>By Model</h2></div>
+      <table>
+        <thead><tr><th>Model</th><th>Reqs</th><th>Tokens</th><th>Cached</th><th>Cost</th></tr></thead>
+        <tbody id="usage-model"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>By Provider Instance</h2></div>
+    <table>
+      <thead><tr><th>Provider</th><th>Reqs</th><th>Success</th><th>Input</th><th>Output</th><th>Cached In</th><th>Cache Write</th><th>Total</th><th>Cost</th></tr></thead>
+      <tbody id="usage-backend"></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/usage.js"></script>
+{% endblock %}

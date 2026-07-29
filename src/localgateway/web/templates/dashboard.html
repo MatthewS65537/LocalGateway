@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — LocalGateway{% endblock %}
+{% set active_page = "dashboard" %}
+{% block content %}
+<section class="page">
+  <h1 class="page-title">Dashboard</h1>
+  <p class="page-sub">Live overview of your gateway.</p>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Gateway Status</h2>
+      <div style="display:flex;gap:8px">
+        <button class="success" id="dash-start" onclick="startServer()">Start</button>
+        <button class="danger" id="dash-stop" onclick="stopServer()">Stop</button>
+        <button class="secondary" onclick="restartServer()">Restart</button>
+      </div>
+    </div>
+    <div id="dash-status" style="display:flex;gap:28px;flex-wrap:wrap;font-size:0.86rem;align-items:center">
+      <span><span style="color:var(--text-dim)">State:</span> <span id="dash-state">—</span></span>
+      <span><span style="color:var(--text-dim)">PID:</span> <span class="mono" id="dash-pid">—</span></span>
+      <span><span style="color:var(--text-dim)">Uptime:</span> <span class="mono" id="dash-uptime">—</span></span>
+      <span><span style="color:var(--text-dim)">Port:</span> <input type="number" id="dash-port-input" value="8080" min="1" max="65535" style="width:90px;padding:4px 8px;font-size:0.85rem" onchange="savePortFromDash()"></span>
+    </div>
+  </div>
+
+  <div class="stat-strip" id="dash-stats">
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Requests (24h)</div></div>
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Tokens</div></div>
+    <div class="stat-cell"><div class="stat-num accent">—</div><div class="stat-cap">Est. Cost</div></div>
+    <div class="stat-cell"><div class="stat-num">—</div><div class="stat-cap">Success Rate</div></div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-head"><h2>Provider Health</h2></div>
+      <div id="health-list"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Active Rate Limits</h2></div>
+      <div id="ratelimit-list"></div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

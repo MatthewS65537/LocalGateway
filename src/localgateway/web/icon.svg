@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lg-bg" x1="10" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4b8ef1"/>
+      <stop offset="1" stop-color="#7c5cf1"/>
+    </linearGradient>
+    <radialGradient id="lg-sheen" cx="20" cy="8" r="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#lg-bg)"/>
+  <rect width="64" height="64" rx="15" fill="url(#lg-sheen)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.55">
+    <path d="M14 17q10 0 13 10"/>
+    <path d="M12 32h12"/>
+    <path d="M14 47q10 0 13-10"/>
+  </g>
+  <path d="M32 24.5 39.5 32 32 39.5 24.5 32Z" fill="#ffffff"/>
+  <g fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 32h9"/>
+    <path d="M45 26l6 6-6 6"/>
+  </g>
+</svg>
