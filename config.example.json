@@ -1,0 +1,73 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3456,
+    "api_key": null,
+    "routing_mode": "explore",
+    "routing_decay": 0.75,
+    "probe_enabled": true,
+    "probe_interval_s": 3600.0,
+    "probe_max_tokens": 64,
+    "chart_enabled": false,
+    "cache_affinity_enabled": false,
+    "cache_affinity_ttl_sec": 300,
+    "max_inflight_before_spill": null
+  },
+  "providers": [
+    {
+      "id": "my-provider",
+      "name": "My Provider",
+      "base_url": "https://api.example.com/v1",
+      "api_key": "REPLACE_WITH_YOUR_API_KEY",
+      "headers": {},
+      "timeout": 120.0,
+      "enabled": true,
+      "stream_idle_timeout": 60.0,
+      "reasoning_mode": "auto",
+      "avatar": ""
+    }
+  ],
+  "models": [
+    {
+      "id": "my-model",
+      "backends": [
+        {
+          "provider": "my-provider",
+          "model": "upstream-model-name",
+          "priority": 1,
+          "enabled": true,
+          "context_length": 128000,
+          "max_output_tokens": 8192,
+          "cache_supported": null
+        }
+      ],
+      "description": "Example logical model with a single backend.",
+      "context_length": null,
+      "enabled": true,
+      "capabilities": {
+        "text": true,
+        "vision": false,
+        "audio": false,
+        "tools": true,
+        "json_mode": false,
+        "parallel_tool_calls": false,
+        "streaming": true
+      },
+      "modality": "text",
+      "max_output_tokens": null,
+      "tags": [],
+      "aliases": ["my-model-alias"],
+      "default_params": {},
+      "display_name": "My Model",
+      "avatar": ""
+    }
+  ],
+  "pricing": {
+    "my-provider:upstream-model-name": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": null,
+      "cache_write": null
+    }
+  }
+}

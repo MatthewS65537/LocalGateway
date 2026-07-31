@@ -44,7 +44,7 @@ function toggleAddProvider() {
   const form = document.getElementById('add-provider-form');
   form.classList.toggle('hidden');
   if (!form.classList.contains('hidden')) {
-    ['new-prov-id','new-prov-name','new-prov-url','new-prov-key'].forEach(id => document.getElementById(id).value='');
+    ['new-prov-id','new-prov-name','new-prov-avatar','new-prov-url','new-prov-key'].forEach(id => document.getElementById(id).value='');
     document.getElementById('new-prov-timeout').value = '120';
     document.getElementById('new-prov-id').focus();
   }
@@ -52,12 +52,13 @@ function toggleAddProvider() {
 async function addProvider() {
   const id = document.getElementById('new-prov-id').value.trim();
   const name = document.getElementById('new-prov-name').value.trim();
+  const avatar = document.getElementById('new-prov-avatar').value.trim();
   const baseUrl = document.getElementById('new-prov-url').value.trim();
   const apiKey = document.getElementById('new-prov-key').value.trim();
   const timeout = parseFloat(document.getElementById('new-prov-timeout').value) || 120;
   if (!id || !baseUrl) { toast('ID and Base URL are required', 'error'); return; }
   if (currentConfig.providers.some(p => p.id === id)) { toast('Provider ID already exists', 'error'); return; }
-  currentConfig.providers.push({ id, name: name || id, base_url: baseUrl, api_key: apiKey, headers: {}, timeout });
+  currentConfig.providers.push({ id, name: name || id, base_url: baseUrl, api_key: apiKey, headers: {}, timeout, avatar });
   if (await saveCurrentConfig()) { toggleAddProvider(); toast('Provider added', 'success'); }
 }
 function toggleEditProvider(id) {
@@ -73,12 +74,53 @@ async function deleteProvider(id) {
 async function saveProviderEdit(id) {
   const p = currentConfig.providers.find(p => p.id === id);
   if (!p) return;
-  p.name = document.getElementById('edit-name-'+id).value.trim() || p.id;
+  const newId = document.getElementById('edit-id-'+id).value.trim();
+  const newName = document.getElementById('edit-name-'+id).value.trim() || newId;
+  const newAvatar = document.getElementById('edit-avatar-'+id).value.trim();
+  p.name = newName;
   p.base_url = document.getElementById('edit-url-'+id).value.trim();
   p.api_key = document.getElementById('edit-key-'+id).value.trim();
   p.timeout = parseFloat(document.getElementById('edit-timeout-'+id).value) || 120;
+  p.avatar = newAvatar;
+
+  // Slug rename: delegate to server-side cascade endpoint.
+  if (newId && newId !== id) {
+    if (currentConfig.providers.some(o => o.id === newId && o !== p)) {
+      toast('Provider ID "'+newId+'" already exists', 'error');
+      return;
+    }
+    if (!await confirm2('Rename provider "'+id+'" → "'+newId+'"? This updates all models, pricing, usage data, and snooze state keyed to it.')) {
+      return;
+    }
+    // Save non-slug field changes first (still under old ID).
+    if (!await saveCurrentConfig()) return;
+    // Server-side rename cascades to config, usage DB, snooze, pricing.
+    try {
+      const r = await fetch('/admin/rename', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ type: 'provider', old_id: id, new_id: newId }),
+      });
+      const res = r.ok ? await r.json() : null;
+      if (!r.ok) {
+        toast('Rename failed: ' + (res && res.error || 'unknown'), 'error');
+        return;
+      }
+      const parts = [];
+      if (res.backend_refs_updated) parts.push(res.backend_refs_updated + ' backend refs');
+      if (res.pricing_keys_moved) parts.push(res.pricing_keys_moved + ' pricing keys');
+      if (res.usage_rows_updated) parts.push(res.usage_rows_updated + ' usage rows');
+      if (res.snooze_keys_moved) parts.push(res.snooze_keys_moved + ' snooze keys');
+      if (parts.length) toast('Migrated ' + parts.join(', '), 'info');
+    } catch(e) {
+      toast('Rename error: ' + e.message, 'error');
+      return;
+    }
+    // Reload config from server to pick up the renamed state.
+    await loadConfig();
+  } else {
+    await saveCurrentConfig();
+  }
   editingProvider = null;
-  await saveCurrentConfig();
   toast('Provider updated', 'success');
 }
 function renderProviders() {
@@ -91,7 +133,9 @@ function renderProviders() {
     if (editingProvider === p.id) {
       return '<div class="form-section">'
         + '<h2 style="margin-bottom:14px">Edit: '+esc(p.id)+'</h2>'
+        + '<div class="form-row"><label>ID (slug)</label><input type="text" id="edit-id-'+p.id+'" value="'+esc(p.id)+'" title="Changing the slug updates all backend references"></div>'
         + '<div class="form-row"><label>Name</label><input type="text" id="edit-name-'+p.id+'" value="'+esc(p.name||p.id)+'"></div>'
+        + '<div class="form-row"><label>Avatar</label><input type="text" id="edit-avatar-'+p.id+'" value="'+esc(p.avatar||'')+'" placeholder="e.g. OG, GPT, ☁️" maxlength="8" title="Custom text for the avatar tile"></div>'
         + '<div class="form-row"><label>Base URL</label><input type="text" id="edit-url-'+p.id+'" value="'+esc(p.base_url)+'"></div>'
         + '<div class="form-row"><label>API Key</label><div class="api-key-wrap"><input type="password" id="edit-key-'+p.id+'" value="'+esc(p.api_key||'')+'"><button class="reveal-btn" onclick="toggleReveal(\'edit-key-'+p.id+'\', this)">show</button></div></div>'
         + '<div class="form-row"><label>Timeout (s)</label><input type="number" id="edit-timeout-'+p.id+'" value="'+(p.timeout||120)+'"></div>'
@@ -102,7 +146,7 @@ function renderProviders() {
     const mode = p.reasoning_mode || 'auto';
     const disc = discoveryOpen === p.id ? renderDiscovery(p.id) : '';
     return '<div class="provider-row" style="flex-wrap:wrap' + (enabled ? '' : ';opacity:0.55') + '">'
-      + '<div class="provider-info"><span class="provider-name">'+esc(p.name||p.id)+'</span><code class="provider-id">'+esc(p.id)+'</code><div class="provider-url">'+esc(p.base_url)+'</div></div>'
+      + '<div class="provider-info" style="display:flex;align-items:center;gap:10px"><span style="flex-shrink:0">'+providerAvatar(p.id, 30, p.avatar)+'</span><span><span class="provider-name">'+esc(p.name||p.id)+'</span><code class="provider-id">'+esc(p.id)+'</code><div class="provider-url">'+esc(p.base_url)+'</div></span></div>'
       + '<select style="width:auto;padding:5px 8px;font-size:0.78rem" title="Reasoning normalization" onchange="setReasoningMode(\''+esc(p.id)+'\',this.value)">'
       +   '<option value="auto"'+(mode==='auto'?' selected':'')+'>reasoning: dual-emit</option>'
       +   '<option value="passthrough"'+(mode==='passthrough'?' selected':'')+'>reasoning: passthrough</option>'

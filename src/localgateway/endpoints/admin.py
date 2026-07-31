@@ -15,6 +15,8 @@ from ..usage import (
     get_model_aggregates,
     get_backend_percentiles,
     get_backend_series,
+    rename_model,
+    rename_provider,
     PERCENTILES,
 )
 from .. import logs
@@ -83,7 +85,11 @@ async def models_overview(hours: int = 168):
         req = a.get("requests", 0)
         models.append({
             "id": m.id,
+            "display_name": m.display_name or None,
+            "avatar": m.avatar or None,
             "description": m.description or None,
+            "modality": m.modality or None,
+            "tags": m.tags or [],
             "context_length": m.context_length,
             "enabled": m.enabled,
             "backend_count": len(active),
@@ -116,6 +122,7 @@ async def model_stats(model_id: str, hours: int = 168, p: str = "p50"):
         backends.append({
             "provider": b.provider,
             "provider_name": (provider.name or provider.id) if provider else b.provider,
+            "provider_avatar": (provider.avatar if provider else "") or "",
             "backend_model": b.model,
             "priority": b.priority,
             "enabled": b.enabled and (provider.enabled if provider else False),
@@ -345,7 +352,7 @@ async def update_model(model_id: str, request: Request):
     if model is None:
         return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
     body = await request.json()
-    for field in ["description", "context_length", "enabled", "capabilities", "modality", "max_output_tokens", "tags", "aliases", "default_params", "display_name"]:
+    for field in ["description", "context_length", "enabled", "capabilities", "modality", "max_output_tokens", "tags", "aliases", "default_params", "display_name", "avatar"]:
         if field in body:
             setattr(model, field, body[field])
     save_config(config)
@@ -512,10 +519,16 @@ async def snooze_backend(request: Request):
     body = await request.json()
     provider = body.get("provider")
     model = body.get("model")
-    seconds = body.get("seconds", 3600)
+    seconds = body.get("seconds")
+    permanent = body.get("permanent", False)
     if not provider or not model:
         return JSONResponse({"error": "provider and model are required"}, status_code=422)
-    ratelimit.snooze(provider, model, float(seconds))
+    if permanent:
+        ratelimit.snooze_permanent(provider, model)
+        ratelimit.save()
+        return JSONResponse({"status": "ok", "remaining": -1})
+    ratelimit.snooze(provider, model, float(seconds or 3600))
+    ratelimit.save()
     return JSONResponse({"status": "ok", "remaining": ratelimit.remaining(provider, model)})
 
 
@@ -527,7 +540,94 @@ async def unsnooze_backend(request: Request):
     if not provider or not model:
         return JSONResponse({"error": "provider and model are required"}, status_code=422)
     ratelimit.unsnooze(provider, model)
+    ratelimit.save()
     return JSONResponse({"status": "ok"})
+
+
+@router.post("/admin/rename")
+async def rename_entity(request: Request):
+    """Rename a model or provider, cascading to all related data.
+
+    Body: { "type": "model" | "provider", "old_id": str, "new_id": str }
+    Cascades to: config, usage DB, logs, probes, snooze state, pricing keys.
+    """
+    body = await request.json()
+    rename_type = body.get("type")
+    old_id = (body.get("old_id") or "").strip()
+    new_id = (body.get("new_id") or "").strip()
+
+    if rename_type not in ("model", "provider"):
+        return JSONResponse({"error": "type must be 'model' or 'provider'"}, status_code=422)
+    if not old_id or not new_id:
+        return JSONResponse({"error": "old_id and new_id are required"}, status_code=422)
+    if old_id == new_id:
+        return JSONResponse({"error": "old_id and new_id are the same"}, status_code=422)
+
+    config = load_config()
+
+    if rename_type == "model":
+        model = config.model_by_id(old_id)
+        if model is None:
+            return JSONResponse({"error": f"Model '{old_id}' not found"}, status_code=404)
+        if config.model_by_id(new_id) is not None:
+            return JSONResponse({"error": f"Model '{new_id}' already exists"}, status_code=409)
+
+        model.id = new_id
+        save_config(config)
+        rows = rename_model(old_id, new_id)
+        return JSONResponse({
+            "status": "ok",
+            "type": "model",
+            "old_id": old_id,
+            "new_id": new_id,
+            "usage_rows_updated": rows,
+        })
+
+    # Provider rename
+    provider = config.provider_by_id(old_id)
+    if provider is None:
+        return JSONResponse({"error": f"Provider '{old_id}' not found"}, status_code=404)
+    if config.provider_by_id(new_id) is not None:
+        return JSONResponse({"error": f"Provider '{new_id}' already exists"}, status_code=409)
+
+    provider.id = new_id
+
+    # Cascade backend.provider references
+    backend_refs = 0
+    for m in config.models:
+        for b in m.backends:
+            if b.provider == old_id:
+                b.provider = new_id
+                backend_refs += 1
+
+    # Cascade pricing keys (provider:backend_model)
+    pricing = dict(config.pricing) if config.pricing else {}
+    prefix = old_id + ":"
+    moved_pricing = 0
+    for k in list(pricing.keys()):
+        if k.startswith(prefix):
+            pricing[new_id + ":" + k[len(prefix):]] = pricing.pop(k)
+            moved_pricing += 1
+    config.pricing = pricing
+
+    save_config(config)
+
+    # Cascade usage DB + logs + probes
+    rows = rename_provider(old_id, new_id)
+
+    # Cascade snooze state (in-memory + file)
+    snooze_moved = ratelimit.rename_provider(old_id, new_id)
+
+    return JSONResponse({
+        "status": "ok",
+        "type": "provider",
+        "old_id": old_id,
+        "new_id": new_id,
+        "backend_refs_updated": backend_refs,
+        "pricing_keys_moved": moved_pricing,
+        "usage_rows_updated": rows,
+        "snooze_keys_moved": snooze_moved,
+    })
 
 
 @router.get("/admin/providers/{provider_id}/models")
@@ -590,6 +690,9 @@ async def test_backend(request: Request):
     provider = config.provider_by_id(provider_id)
     if provider is None:
         return JSONResponse({"error": f"Provider '{provider_id}' not found"}, status_code=404)
+
+    if not ratelimit.is_available(provider_id, model):
+        return JSONResponse({"ok": False, "skipped": True, "error": "backend is snoozed"}, status_code=200)
 
     max_tokens = config.server.probe_max_tokens or 64
     probe_body = {

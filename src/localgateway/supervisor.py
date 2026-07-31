@@ -184,7 +184,10 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
             req = a.get("requests", 0)
             models.append({
                 "id": m.id,
+                "display_name": m.display_name or None,
                 "description": m.description or None,
+                "modality": m.modality or None,
+                "tags": m.tags or [],
                 "context_min": context_min,
                 "context_max": context_max,
                 "enabled": m.enabled,

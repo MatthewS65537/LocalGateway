@@ -3,8 +3,18 @@
 {% set active_page = "models" %}
 {% block content %}
 <section class="page">
-  <h1 class="page-title">Models</h1>
-  <p class="page-sub">Your gateway model catalog — throughput, latency, and uptime per provider.</p>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+    <div>
+      <h1 class="page-title">Models</h1>
+      <p class="page-sub" style="margin-bottom:0">Your gateway model catalog — throughput, latency, and uptime per provider.</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="secondary" onclick="toggleCompareMode()" id="compare-btn">Compare</button>
+      <button class="primary" onclick="showAddModelModal()">+ Add Model</button>
+    </div>
+  </div>
+
+  <div class="modality-tabs" id="modality-tabs"></div>
 
   <div class="toolbar">
     <input type="text" id="models-search" placeholder="Search models…" oninput="renderModelCatalog()" style="max-width:280px">
@@ -16,21 +26,14 @@
       <option value="context">Largest context</option>
     </select>
     <div class="seg" id="catalog-view-toggle">
-      <button class="active" type="button" onclick="setCatalogView('cards', this)">Cards</button>
+      <button class="active" type="button" onclick="setCatalogView('cards', this)">List</button>
       <button type="button" onclick="setCatalogView('table', this)">Table</button>
     </div>
-    <button class="secondary" onclick="toggleCompareMode()" id="compare-btn">Compare</button>
   </div>
 
   <div class="filter-bar" id="catalog-filters">
     <select id="filter-provider" onchange="renderModelCatalog()">
       <option value="">All providers</option>
-    </select>
-    <select id="filter-modality" onchange="renderModelCatalog()">
-      <option value="">All modalities</option>
-      <option value="text">Text</option>
-      <option value="text+vision">Text + Vision</option>
-      <option value="multimodal">Multimodal</option>
     </select>
     <select id="filter-capability" onchange="renderModelCatalog()">
       <option value="">All capabilities</option>
@@ -42,10 +45,9 @@
     <input type="number" id="filter-min-ctx" placeholder="Min context" oninput="renderModelCatalog()" style="width:120px">
     <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" oninput="renderModelCatalog()" style="width:140px">
     <span style="font-size:0.78rem;color:var(--text-dim)">Tokens measured over the last 7 days</span>
-    <button class="primary" style="margin-left:auto" onclick="showAddModelModal()">+ Add Model</button>
   </div>
   <div id="models-loading" class="skeleton skeleton-block"></div>
-  <div id="models-cards" class="grid grid-2"></div>
+  <div id="models-cards" class="catalog-rows"></div>
   <div id="models-table" class="catalog-table-wrap hidden"></div>
 </section>
 {% endblock %}

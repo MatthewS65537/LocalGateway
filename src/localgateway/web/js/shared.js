@@ -44,6 +44,66 @@ function fmtPrice(p) {
   return '$' + (p * 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+// ---------- copy-to-clipboard ----------
+function copyId(text, btn) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      if (btn) { const orig = btn.innerHTML; btn.innerHTML = '✓'; setTimeout(() => { btn.innerHTML = orig; }, 1400); }
+      toast('Copied ' + text, 'info', 1600);
+    }).catch(() => {});
+  }
+}
+
+// ---------- provider avatar ----------
+const _AVATAR_PALETTE = [
+  ['#10a37f', '#1a7f64'], ['#d97757', '#b85a3d'], ['#7c5cf1', '#5b3fd6'],
+  ['#6366f1', '#4f46e5'], ['#0078d4', '#005a9e'], ['#f59e0b', '#d97706'],
+  ['#ef4444', '#dc2626'], ['#14b8a6', '#0d9488'],
+];
+function _hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+  return Math.abs(h);
+}
+
+// Smart font sizing: shrink font as text gets longer so it always fits the tile.
+function _avatarFontSize(text, size) {
+  const len = (text || '').length;
+  const base = size >= 40 ? 1.1 : (size <= 20 ? 0.62 : 0.74);
+  if (len <= 1) return base;
+  if (len === 2) return base * 0.74;
+  if (len === 3) return base * 0.58;
+  if (len <= 5) return base * 0.46;
+  return base * 0.36;
+}
+
+// Resolve the label to render: custom text wins, else first letter of the label.
+function _avatarLabel(customText, fallback) {
+  if (customText && customText.trim()) return customText.trim();
+  return (fallback || '?').charAt(0).toUpperCase();
+}
+
+function _avatarMarkup(label, colors, size) {
+  const [c1, c2] = colors;
+  const fs = _avatarFontSize(label, size);
+  const pad = label.length > 2 ? 'padding:0 4px;' : '';
+  return '<span class="avatar" style="width:'+size+'px;height:'+size+'px;font-size:'+fs+'rem;'+pad+'background:linear-gradient(135deg,'+c1+','+c2+')">'+esc(label)+'</span>';
+}
+
+function providerAvatar(providerId, size, avatarText) {
+  const sz = size || 28;
+  const label = _avatarLabel(avatarText, providerId);
+  const [c1, c2] = _AVATAR_PALETTE[_hashStr(providerId || '') % _AVATAR_PALETTE.length];
+  return _avatarMarkup(label, [c1, c2], sz);
+}
+
+function modelAvatar(modelId, displayName, size, avatarText) {
+  const sz = size || 28;
+  const label = _avatarLabel(avatarText, displayName || modelId);
+  const [c1, c2] = _AVATAR_PALETTE[_hashStr(modelId || '') % _AVATAR_PALETTE.length];
+  return _avatarMarkup(label, [c1, c2], sz);
+}
+
 // ---------- toast & confirm ----------
 const TOAST_ICONS = { success: '✓', error: '!', info: 'i' };
 function toast(message, type='info', timeout=3800) {
@@ -165,6 +225,14 @@ async function restartServer() {
   toast('Restarting gateway…', 'info', 2000);
   await fetch('/admin/server/restart', { method: 'POST' });
   setTimeout(async () => { await loadServerStatus(); toast('Gateway restarted', 'success'); }, 1000);
+}
+
+async function shutdownGateway() {
+  const confirmed = await confirm2('Stop the gateway worker and close this dashboard?');
+  if (!confirmed) return;
+  try { await fetch('/admin/server/stop', { method: 'POST' }); } catch(e) {}
+  document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;background:var(--bg)"><h1 style="font-family:var(--font-display);font-size:1.5rem;color:var(--text-bright)">Gateway shut down</h1><p style="color:var(--text-dim);font-size:0.9rem">You can close this tab.</p></div>';
+  setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
 }
 
 // ---------- routing help ----------

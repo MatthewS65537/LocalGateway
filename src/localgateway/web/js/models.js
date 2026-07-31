@@ -3,6 +3,7 @@ let modelsOverview = null;
 let compareMode = false;
 let compareSelection = new Set();
 let catalogView = localStorage.getItem('lg-catalog-view') || 'cards';
+let modalityFilter = '';
 
 function setCatalogView(view, btn) {
   catalogView = view;
@@ -12,7 +13,7 @@ function setCatalogView(view, btn) {
   else {
     const buttons = document.querySelectorAll('#catalog-view-toggle button');
     buttons.forEach(b => {
-      if ((view === 'cards' && b.textContent.trim() === 'Cards') ||
+      if ((view === 'cards' && b.textContent.trim() === 'List') ||
           (view === 'table' && b.textContent.trim() === 'Table')) b.classList.add('active');
     });
   }
@@ -61,6 +62,7 @@ async function loadModelsPage() {
     const { ok, data } = await fetchJSON('/admin/models/overview?hours=168');
     modelsOverview = ok ? data.models : null;
   } catch(e) { modelsOverview = null; }
+  renderModalityTabs();
   const params = new URLSearchParams(location.search);
   const q = params.get('q');
   if (q) {
@@ -69,6 +71,43 @@ async function loadModelsPage() {
   }
   setCatalogView(catalogView);
   if (loading) loading.classList.add('hidden');
+}
+
+function _modalityCounts() {
+  const cfgModels = (currentConfig && currentConfig.models) || [];
+  const base = modelsOverview || cfgModels.map(m => ({ id: m.id, modality: m.modality }));
+  const counts = { '': 0, 'text': 0, 'text+vision': 0, 'multimodal': 0 };
+  base.forEach(m => {
+    const mod = m.modality || '';
+    counts[''] = (counts[''] || 0) + 1;
+    if (mod && counts[mod] != null) counts[mod] += 1;
+    else if (mod) counts[mod] = (counts[mod] || 0) + 1;
+  });
+  return counts;
+}
+
+function renderModalityTabs() {
+  const el = document.getElementById('modality-tabs');
+  if (!el) return;
+  const counts = _modalityCounts();
+  const tabs = [
+    { val: '', label: 'All' },
+    { val: 'text', label: 'Text' },
+    { val: 'text+vision', label: 'Text + Vision' },
+    { val: 'multimodal', label: 'Multimodal' },
+  ];
+  el.innerHTML = tabs.map(t => {
+    const cnt = counts[t.val] || 0;
+    if (!t.val && cnt === 0) return '';
+    return '<button class="modality-tab'+(modalityFilter === t.val ? ' active' : '')+'" onclick="setModalityFilter(\''+t.val+'\')">'
+      + esc(t.label) + ' <span class="tab-count">'+cnt+'</span></button>';
+  }).join('');
+}
+
+function setModalityFilter(val) {
+  modalityFilter = val;
+  renderModalityTabs();
+  renderModelCatalog();
 }
 
 function _filteredModels() {
@@ -109,7 +148,6 @@ function _filteredModels() {
   const providerFilter = document.getElementById('filter-provider').value;
   if (providerFilter) models = models.filter(m => (m.backends || []).some(b => b.provider === providerFilter));
 
-  const modalityFilter = document.getElementById('filter-modality').value;
   if (modalityFilter) models = models.filter(m => m.modality === modalityFilter);
 
   const capabilityFilter = document.getElementById('filter-capability').value;
@@ -153,7 +191,7 @@ function renderModelCatalog() {
     cardsEl.classList.add('hidden');
     tableEl.classList.remove('hidden');
     tableEl.innerHTML = '<table class="catalog-table"><thead><tr>' +
-      '<th>Model</th><th>Modality</th><th>Context</th><th>TPS P50</th><th>Tokens 7d</th><th>In / Out</th><th>Uptime</th><th>Backends</th>' +
+      '<th>Model</th><th>Modality</th><th>Context</th><th>TPS P50</th><th>Tokens 7d</th><th>Spend 7d</th><th>In / Out</th><th>Uptime</th><th>Backends</th>' +
       '</tr></thead><tbody>' +
       models.map(m => {
         const disabled = m.enabled === false;
@@ -164,6 +202,7 @@ function renderModelCatalog() {
           `<td>${m.context_length ? fmtTokens(m.context_length) : '—'}</td>` +
           `<td>${m.tps_p50 != null ? fmt(m.tps_p50, 0) : '—'}</td>` +
           `<td>${fmtTokens(m.tokens)}</td>` +
+          `<td>${fmtCost(m.cost)}</td>` +
           `<td>${m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—'}</td>` +
           `<td>${m.success_rate != null ? m.success_rate+'%' : '—'}</td>` +
           `<td>${m.backend_count || 0}</td></tr>`;
@@ -180,46 +219,75 @@ function renderModelCatalog() {
     const disabled = m.enabled === false;
     const modalityBadge = m.modality ? `<span class="badge badge-purple">${esc(m.modality)}</span>` : '';
     const tagsHtml = (m.tags || []).slice(0, 3).map(t => `<span class="badge badge-gray">${esc(t)}</span>`).join('');
+    const primaryProvider = (m.backends || [])[0];
+    const avatarHtml = modelAvatar(m.id, m.display_name, 30, m.avatar);
+    const ctxStr = (m.context_min != null && m.context_max != null) ? (m.context_min === m.context_max ? fmtTokens(m.context_min) : fmtTokens(m.context_min)+'-'+fmtTokens(m.context_max)) : (m.context_length ? fmtTokens(m.context_length) : '—');
+    const priceStr = m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—';
 
     if (compareMode) {
       const selected = compareSelection.has(m.id);
       const canSelect = selected || compareSelection.size < 3;
-      return '<div class="card" style="cursor:pointer;margin-bottom:0;opacity:'+(canSelect?'1':'0.4')+'" onclick="toggleCompareSelection(\''+esc(m.id)+'\')">'
-        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px">'
-        +   '<div style="display:flex;align-items:center;gap:10px">'
-        +     '<input type="checkbox" '+(selected?'checked':'')+(!canSelect?' disabled':'')+' onclick="toggleCompareSelection(\''+esc(m.id)+'\', event)" style="width:18px;height:18px">'
-        +     '<h2 style="font-size:1.05rem"><code>'+esc(m.id)+'</code></h2>'
+      return '<div class="row-card" style="opacity:'+(canSelect?'1':'0.4')+'" onclick="toggleCompareSelection(\''+esc(m.id)+'\')">'
+        + '<input type="checkbox" '+(selected?'checked':'')+(!canSelect?' disabled':'')+' onclick="toggleCompareSelection(\''+esc(m.id)+'\', event)" style="width:18px;height:18px;flex-shrink:0">'
+        + '<div class="rc-left">'
+        +   avatarHtml
+        +   '<div>'
+        +     '<div class="rc-title"><span class="rc-name">'+(m.display_name ? esc(m.display_name) : esc(m.id))+'</span><span class="rc-slug">'+esc(m.id)+'</span>'+modalityBadge+tagsHtml+'</div>'
+        +     '<div class="rc-desc">'+esc(m.description || 'No description')+'</div>'
         +   '</div>'
-        +   '<span style="display:flex;gap:4px;align-items:center">'+modalityBadge+tagsHtml+'</span>'
         + '</div>'
-        + '<p style="font-size:0.82rem;color:var(--text-dim);margin-bottom:12px;min-height:2.4em">'+esc(m.description || 'No description')+'</p>'
-        + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
-        +   _statChip('Context', m.context_length ? fmtTokens(m.context_length) : '—')
-        +   _statChip('In / Out', m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—')
+        + '<div class="rc-right">'
+        +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+esc(ctxStr)+'</div><div class="l">Context</div></div>'
+        +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+esc(priceStr)+'</div><div class="l">In / Out</div></div>'
         + '</div></div>';
     }
 
-    return '<div class="card" style="cursor:pointer;margin-bottom:0" onclick="location.href=\'/models/'+encodeURIComponent(m.id)+'\'">'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px">'
-      +   '<h2 style="font-size:1.05rem">'+(m.display_name ? '<span>'+esc(m.display_name)+'</span> <code style="font-size:0.7rem;color:var(--text-dim)">'+esc(m.id)+'</code>' : '<code>'+esc(m.id)+'</code>')+'</h2>'
-      +   '<span style="display:flex;gap:4px;align-items:center">'
-      +     modalityBadge + tagsHtml
-      +     (disabled ? '<span class="badge badge-gray">disabled</span>' : '<span class="badge badge-blue">'+(m.backend_count||0)+' backend'+((m.backend_count||0)===1?'':'s')+'</span>')
-      +   '</span></div>'
-      + '<p style="font-size:0.82rem;color:var(--text-dim);margin-bottom:12px;min-height:2.4em">'+esc(m.description || 'No description')+'</p>'
-      + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
-      +   _statChip('Tokens 7d', fmtTokens(m.tokens))
-      +   _statChip('TPS P50', m.tps_p50 != null ? fmt(m.tps_p50, 0) : '—', true)
-      +   _statChip('Context', (m.context_min != null && m.context_max != null) ? (m.context_min === m.context_max ? fmtTokens(m.context_min) : fmtTokens(m.context_min)+'-'+fmtTokens(m.context_max)) : '—')
-      +   _statChip('In / Out', m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—')
-      +   _statChip('Uptime', m.success_rate != null ? m.success_rate+'%' : '—')
+    return '<div class="row-card" onclick="location.href=\'/models/'+encodeURIComponent(m.id)+'\'">'
+      + '<div class="rc-left">'
+      +   avatarHtml
+      +   '<div>'
+      +     '<div class="rc-title">'
+      +       '<span class="rc-name">'+(m.display_name ? esc(m.display_name) : esc(m.id))+'</span>'
+      +       '<span class="rc-slug">'+esc(m.id)+'</span>'
+      +       '<button class="copy-btn" onclick="event.stopPropagation();copyId(\''+esc(m.id)+'\',this)" title="Copy model ID">⧉</button>'
+      +       modalityBadge + tagsHtml
+      +       (disabled ? '<span class="badge badge-gray">disabled</span>' : '<span class="badge badge-blue">'+(m.backend_count||0)+' backend'+((m.backend_count||0)===1?'':'s')+'</span>')
+      +     '</div>'
+      +     '<div class="rc-desc">'+esc(m.description || 'No description')+'</div>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="rc-right">'
+      +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+esc(ctxStr)+'</div><div class="l">Context</div></div>'
+      +   '<div class="rc-stat al-r pl9 pr16"><div class="v">'+esc(priceStr)+'</div><div class="l">In / Out</div></div>'
+      +   '<div class="rc-divider"></div>'
+      +   '<div class="rc-stat al-l pl16 pr9"><div class="v accent">'+(m.tps_p50 != null ? fmt(m.tps_p50, 0) : '—')+'</div><div class="l">TPS P50</div></div>'
+      +   '<div class="rc-stat al-r pl9 pr16"><div class="v">'+(m.success_rate != null ? m.success_rate+'%' : '—')+'</div><div class="l">Uptime</div></div>'
+      +   '<div class="rc-divider"></div>'
+      +   '<div class="rc-stat al-l pl16 pr9"><div class="v">'+fmtTokens(m.tokens)+'</div><div class="l">Tokens 7d</div></div>'
+      +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+fmtCost(m.cost)+'</div><div class="l">Spend 7d</div></div>'
       + '</div></div>';
   }).join('');
 
   if (compareMode && compareSelection.size >= 2) {
     cardsEl.innerHTML += '<div style="position:fixed;bottom:20px;right:20px;z-index:10"><button class="primary" onclick="showCompare()">Compare ' + compareSelection.size + ' models</button></div>';
   }
+  alignStatColumns();
 }
+
+function alignStatColumns() {
+  const rows = [...document.querySelectorAll('.row-card')].filter(r => r.querySelectorAll('.rc-stat').length);
+  if (!rows.length) return;
+  const groups = {};
+  rows.forEach(r => { const n = r.querySelectorAll('.rc-stat').length; (groups[n] = groups[n] || []).push(r); });
+  Object.values(groups).forEach(grp => {
+    if (grp.length < 2) return;
+    const n = grp[0].querySelectorAll('.rc-stat').length;
+    const widths = new Array(n).fill(0);
+    grp.forEach(r => { const s = r.querySelectorAll('.rc-stat'); for (let i = 0; i < n; i++) widths[i] = Math.max(widths[i], s[i].offsetWidth); });
+    grp.forEach(r => { const s = r.querySelectorAll('.rc-stat'); for (let i = 0; i < n; i++) s[i].style.width = widths[i] + 'px'; });
+  });
+}
+window.addEventListener('load', alignStatColumns);
 
 function showAddModelModal() {
   const providers = (currentConfig && currentConfig.providers) || [];

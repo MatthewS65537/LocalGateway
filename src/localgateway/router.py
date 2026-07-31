@@ -22,7 +22,7 @@ class ProviderPrefs:
     order: list[str] | None = None
     ignore: list[str] | None = None
     allow_fallbacks: bool = True
-    sort: Literal["latency", "throughput", "price"] | None = None
+    sort: Literal["latency", "throughput", "price", "cache"] | None = None
 
     @classmethod
     def from_request(cls, body: dict | None) -> "ProviderPrefs | None":
@@ -39,7 +39,7 @@ class ProviderPrefs:
         if not isinstance(allow, bool):
             allow = True
         sort = raw.get("sort")
-        if sort not in ("latency", "throughput", "price", None):
+        if sort not in ("latency", "throughput", "price", "cache", None):
             sort = None
         return cls(
             order=[str(x) for x in order] if order else None,
@@ -64,6 +64,7 @@ def _sort_key(
     selected: SelectedBackend,
     config: GatewayConfig,
     sort: str,
+    cache_key: str | None = None,
 ) -> tuple:
     snap = stats_mod.snapshot()
     key = f"{selected.provider.id}:{selected.backend.model}"
@@ -86,6 +87,19 @@ def _sort_key(
         total = (pricing.input or 0) + (pricing.output or 0)
         missing = pricing.input == 0 and pricing.output == 0
         return (missing, total)
+    if sort == "cache":
+        # Prefer warm backends (higher hit-rate) then lower latency.
+        ttl = getattr(config.server, "cache_affinity_ttl_sec", 300) or 300
+        warm = stats_mod.warm_backends_for(cache_key or "", [key], ttl)
+        is_warm = 0 if warm else 1
+        warm_rate = 0.0
+        if warm:
+            wsnap = stats_mod.warmth_snapshot()
+            entry = (wsnap.get(cache_key or "") or {}).get(key)
+            if entry:
+                warm_rate = entry.get("last_hit_rate", 0.0)
+        lat = st.get("avg_latency_ms") or 999999
+        return (is_warm, -warm_rate, lat)
     return (0,)
 
 
@@ -97,6 +111,7 @@ def select_backends(
     *,
     prefs: ProviderPrefs | None = None,
     rng: random.Random | None = None,
+    cache_key: str | None = None,
 ) -> Iterator[SelectedBackend]:
     """Yield backends in fallback order.
 
@@ -108,6 +123,15 @@ def select_backends(
     - Optional per-request ``prefs`` (order / ignore / allow_fallbacks / sort).
     - Within a tier, available backends are rotated round-robin (or sorted).
     - Rate-limited backends are deferred to the end.
+
+    Cache affinity (config.server.cache_affinity_enabled + ``cache_key``):
+    When active, selection takes PRECEDENCE over tiers/round-robin/order/sort.
+    Priority bands:
+      1. warm + idle  2. warm + busy  3. cold + idle  4. cold + busy  5. ratelimited.
+    Warm = backend has a non-expired warmth entry for ``cache_key``.
+    Idle = in_flight == 0. ``max_inflight_before_spill`` caps warm-busy use.
+    Existing policies (tier order, round-robin, sort, ``order``) only break
+    ties within a band; cache always wins over ``order``.
     """
     model = config.model_by_id(model_id)
     if model is None or not model.enabled:
@@ -117,6 +141,11 @@ def select_backends(
     order = prefs.order if prefs and prefs.order else None
     allow_fallbacks = prefs.allow_fallbacks if prefs else True
     sort = prefs.sort if prefs else None
+
+    cache_affinity = bool(getattr(config.server, "cache_affinity_enabled", False))
+    cache_ttl = getattr(config.server, "cache_affinity_ttl_sec", 300) or 300
+    max_inflight = getattr(config.server, "max_inflight_before_spill", None)
+    affinity_active = cache_affinity and bool(cache_key)
 
     tiers: dict[int, list[tuple[ProviderConfig, BackendConfig]]] = {}
     for b in model.backends:
@@ -136,7 +165,8 @@ def select_backends(
     if not tiers:
         return
 
-    # Prefer providers listed in order: treat as a synthetic first tier
+    # ``order`` providers, collected for tiebreaking (no longer a synthetic
+    # first tier when cache affinity is active — cache always wins over order).
     preferred: list[SelectedBackend] = []
     if order:
         by_provider: dict[str, list[tuple[ProviderConfig, BackendConfig]]] = {}
@@ -147,13 +177,14 @@ def select_backends(
             for p, b in by_provider.get(pid, []):
                 preferred.append(SelectedBackend(provider=p, backend=b))
 
-        if preferred and not allow_fallbacks:
-            # Only preferred providers; still respect rate limits order
+        if preferred and not allow_fallbacks and not affinity_active:
+            # Only preferred providers; still respect rate limits order.
+            # Cache affinity off here (affinity_active is False in this branch).
             avail = [s for s in preferred if ratelimit.is_available(s.provider.id, s.backend.model)]
             limited = [s for s in preferred if not ratelimit.is_available(s.provider.id, s.backend.model)]
             if sort:
-                avail.sort(key=lambda s: _sort_key(s, config, sort))
-                limited.sort(key=lambda s: _sort_key(s, config, sort))
+                avail.sort(key=lambda s: _sort_key(s, config, sort, cache_key))
+                limited.sort(key=lambda s: _sort_key(s, config, sort, cache_key))
             yield from avail
             yield from limited
             return
@@ -168,29 +199,47 @@ def select_backends(
 
     for key in sorted_tier_keys:
         group = tiers[key]
-        # When order is set and allow_fallbacks, skip already-preferred entries in tiers
-        if preferred_keys:
+        # When order is set and allow_fallbacks, skip already-preferred entries
+        # in tiers (they're emitted via the preferred path).
+        if preferred_keys and not affinity_active:
             group = [(p, b) for p, b in group if (p.id, b.model) not in preferred_keys]
         avail = [(p, b) for p, b in group if ratelimit.is_available(b.provider, b.model)]
         limited = [(p, b) for p, b in group if not ratelimit.is_available(b.provider, b.model)]
         avail_sel = [SelectedBackend(provider=p, backend=b) for p, b in avail]
         limited_sel = [SelectedBackend(provider=p, backend=b) for p, b in limited]
         if sort:
-            avail_sel.sort(key=lambda s: _sort_key(s, config, sort))
-            limited_sel.sort(key=lambda s: _sort_key(s, config, sort))
+            avail_sel.sort(key=lambda s: _sort_key(s, config, sort, cache_key))
+            limited_sel.sort(key=lambda s: _sort_key(s, config, sort, cache_key))
         elif avail_sel:
             r = rotation % len(avail_sel)
             avail_sel = avail_sel[r:] + avail_sel[:r]
         available_by_tier[key] = avail_sel
         ratelimited_by_tier[key] = limited_sel
 
+    # ---- Cache-affinity reordering (takes precedence over everything) ----
+    if affinity_active:
+        yield from _emit_cache_affinity(
+            config=config,
+            cache_key=cache_key or "",
+            cache_ttl=cache_ttl,
+            max_inflight=max_inflight,
+            preferred=preferred,
+            preferred_keys=preferred_keys,
+            available_by_tier=available_by_tier,
+            ratelimited_by_tier=ratelimited_by_tier,
+            sorted_tier_keys=sorted_tier_keys,
+            order=order,
+        )
+        return
+
+    # ---- Legacy (cache affinity off): preserve existing emission order ----
     # Emit preferred first (rate-limit aware)
     if preferred:
         avail_p = [s for s in preferred if ratelimit.is_available(s.provider.id, s.backend.model)]
         limited_p = [s for s in preferred if not ratelimit.is_available(s.provider.id, s.backend.model)]
         if sort:
-            avail_p.sort(key=lambda s: _sort_key(s, config, sort))
-            limited_p.sort(key=lambda s: _sort_key(s, config, sort))
+            avail_p.sort(key=lambda s: _sort_key(s, config, sort, cache_key))
+            limited_p.sort(key=lambda s: _sort_key(s, config, sort, cache_key))
         yield from avail_p
         # limited preferred deferred with other ratelimited
 
@@ -211,6 +260,114 @@ def select_backends(
 
     for key in sorted_tier_keys:
         yield from ratelimited_by_tier.get(key, [])
+
+
+def _backend_key(s: SelectedBackend) -> str:
+    return f"{s.provider.id}:{s.backend.model}"
+
+
+def _apply_tiebreak(
+    items: list[SelectedBackend],
+    order: list[str] | None,
+) -> list[SelectedBackend]:
+    """Stable-sort by provider ``order`` (preferred providers first)."""
+    if not order:
+        return items
+    rank = {pid: i for i, pid in enumerate(order)}
+
+    def pos(s: SelectedBackend) -> int:
+        return rank.get(s.provider.id, len(order))
+
+    # stable sort preserves prior (tier/round-robin) order among equal ranks
+    return sorted(items, key=pos)
+
+
+def _emit_cache_affinity(
+    *,
+    config: GatewayConfig,
+    cache_key: str,
+    cache_ttl: float,
+    max_inflight: int | None,
+    preferred: list[SelectedBackend],
+    preferred_keys: set[tuple[str, str]],
+    available_by_tier: dict[int, list[SelectedBackend]],
+    ratelimited_by_tier: dict[int, list[SelectedBackend]],
+    sorted_tier_keys: list[int],
+    order: list[str] | None,
+) -> Iterator[SelectedBackend]:
+    """Emit backends in the 5-band cache-affinity priority order.
+
+    Bands: warm+idle, warm+busy, cold+idle, cold+busy, then ratelimited.
+    Within each band, candidates are ordered by tier then round-robin/round
+    already baked into available_by_tier, then by ``order`` as a tiebreaker.
+    """
+    snap = stats_mod.snapshot()
+
+    # Flatten available candidates in tier order; this is the base tiebreaker.
+    flat: list[SelectedBackend] = []
+    if preferred:
+        # Preferred providers participate; keep their order first within band.
+        flat.extend(preferred)
+    for key in sorted_tier_keys:
+        for s in available_by_tier.get(key, []):
+            if preferred_keys and (s.provider.id, s.backend.model) in preferred_keys:
+                continue
+            flat.append(s)
+
+    candidate_keys = [_backend_key(s) for s in flat]
+    warm_keys = set(stats_mod.warm_backends_for(cache_key, candidate_keys, cache_ttl))
+
+    warm: list[SelectedBackend] = []
+    cold: list[SelectedBackend] = []
+    for s in flat:
+        (warm if _backend_key(s) in warm_keys else cold).append(s)
+
+    def inflight(s: SelectedBackend) -> int:
+        st = snap.get(_backend_key(s), {})
+        return int(st.get("in_flight") or 0)
+
+    def split_idle_busy(items: list[SelectedBackend]) -> tuple[list[SelectedBackend], list[SelectedBackend]]:
+        idle, busy = [], []
+        for s in items:
+            (idle if inflight(s) == 0 else busy).append(s)
+        busy.sort(key=inflight)  # least-busy first
+        return idle, busy
+
+    warm_idle, warm_busy = split_idle_busy(warm)
+    cold_idle, cold_busy = split_idle_busy(cold)
+
+    # ``order`` tiebreaker applied within each band (stable).
+    warm_idle = _apply_tiebreak(warm_idle, order)
+    warm_busy = _apply_tiebreak(warm_busy, order)
+    cold_idle = _apply_tiebreak(cold_idle, order)
+    cold_busy = _apply_tiebreak(cold_busy, order)
+
+    # Cap warm-busy: spill beyond max_inflight into cold-busy (they're busy,
+    # that's why they spilled — so they follow genuinely cold idle backends).
+    if max_inflight is not None and warm_busy:
+        keep, spill = [], []
+        for s in warm_busy:
+            (keep if inflight(s) < max_inflight else spill).append(s)
+        warm_busy = keep
+        cold_busy = spill + cold_busy
+        cold_busy = _apply_tiebreak(cold_busy, order)
+
+    yield from warm_idle
+    yield from warm_busy
+    yield from cold_idle
+    yield from cold_busy
+
+    # Ratelimited backends last (preserving preferred-then-tier order).
+    if preferred:
+        for s in preferred:
+            if not ratelimit.is_available(s.provider.id, s.backend.model):
+                if (s.provider.id, s.backend.model) in preferred_keys:
+                    yield s
+    for key in sorted_tier_keys:
+        for s in ratelimited_by_tier.get(key, []):
+            if preferred_keys and (s.provider.id, s.backend.model) in preferred_keys:
+                continue
+            yield s
 
 
 def _sample_tier_order(

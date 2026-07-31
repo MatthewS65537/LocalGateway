@@ -241,6 +241,20 @@ async def test_admin_backend_test_probe(client):
     assert body["latency_ms"] >= 0
 
 
+async def test_admin_backend_test_skips_snoozed(client):
+    from localgateway.ratelimit import ratelimit
+    ratelimit.snooze_permanent("mock2", "mock-reasoner")
+    try:
+        r = await client.post("/admin/backends/test", json={
+            "provider": "mock2", "model": "mock-reasoner", "stream": True,
+        })
+        body = r.json()
+        assert body["ok"] is False
+        assert body["skipped"] is True
+    finally:
+        ratelimit.unsnooze("mock2", "mock-reasoner")
+
+
 async def test_admin_health(client):
     r = await client.get("/admin/health")
     body = r.json()

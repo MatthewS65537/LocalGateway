@@ -694,3 +694,145 @@ button.active, .btn.active {
   z-index: 100;
   box-shadow: 0 8px 32px rgba(0,0,0,0.25);
 }
+
+/* ============================================================
+   UI modernization — OpenRouter-inspired components
+   ============================================================ */
+
+/* ---------- provider avatar ---------- */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; color: #fff; font-weight: 700; flex-shrink: 0;
+  font-family: var(--font-display); line-height: 1; user-select: none;
+}
+
+/* ---------- copy button ---------- */
+.copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.72rem; cursor: pointer;
+  transition: all 0.15s; flex-shrink: 0; padding: 0;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-surface); }
+
+/* ---------- modality tabs ---------- */
+.modality-tabs {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--border);
+  margin-bottom: 14px; overflow-x: auto;
+}
+.modality-tabs::-webkit-scrollbar { height: 0; }
+.modality-tab {
+  padding: 9px 16px; font-size: 0.82rem; font-weight: 500; color: var(--text-dim);
+  border: none; background: none; cursor: pointer; white-space: nowrap;
+  border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
+  display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px;
+}
+.modality-tab:hover { color: var(--text); }
+.modality-tab.active {
+  color: var(--accent); border-bottom-color: var(--accent);
+  background: none;
+}
+.modality-tab .tab-count {
+  font-size: 0.64rem; background: var(--surface-3); padding: 1px 7px;
+  border-radius: 8px; color: var(--text-dim); font-weight: 600;
+}
+.modality-tab.active .tab-count { background: var(--accent-surface); color: var(--accent); }
+
+/* ---------- catalog row cards ---------- */
+.catalog-rows { display: flex; flex-direction: column; gap: 8px; }
+.row-card {
+  display: flex; align-items: center; gap: 14px; padding: 13px 18px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+  text-decoration: none; color: inherit;
+}
+.row-card:hover { border-color: var(--border-light); background: var(--surface-2); }
+.row-card .rc-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; overflow: hidden; }
+.row-card .rc-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row-card .rc-name { font-family: var(--font-display); font-weight: 600; font-size: 0.92rem; color: var(--text-bright); }
+.row-card .rc-slug { font-family: var(--font-mono); font-size: 0.74rem; color: var(--text-dim); }
+.row-card .rc-desc {
+  font-size: 0.78rem; color: var(--text-dim); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 460px;
+}
+.row-card .rc-right { display: flex; align-items: center; gap: 0; flex-shrink: 0; justify-content: flex-end; }
+.rc-stat { flex-shrink: 0; box-sizing: border-box; white-space: nowrap; }
+.rc-stat .v {
+  display: block; font-family: var(--font-display); font-weight: 600; font-size: 0.84rem;
+  color: var(--text-bright); font-variant-numeric: tabular-nums; line-height: 1.2;
+}
+.rc-stat .v.accent { color: var(--accent); }
+.rc-stat .l {
+  display: block; font-size: 0.58rem; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 0.05em; margin-top: 2px; text-align: right;
+}
+.rc-stat.al-l .v { text-align: left; }
+.rc-stat.al-r .v { text-align: right; }
+.pl9 { padding-left: 9px; } .pr9 { padding-right: 9px; }
+.pl16 { padding-left: 16px; } .pr16 { padding-right: 16px; }
+.rc-divider { width: 1px; align-self: stretch; background: var(--border-light); flex-shrink: 0; opacity: 0.7; }
+@media (max-width: 820px) {
+  .row-card { flex-wrap: wrap; }
+  .row-card .rc-right { width: 100%; justify-content: space-between; gap: 10px; }
+  .row-card .rc-desc { max-width: 100%; }
+}
+
+/* ---------- detail hero ---------- */
+.detail-hero { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 4px; }
+.detail-hero .hero-left { flex: 1; min-width: 0; }
+.detail-hero .hero-name {
+  font-family: var(--font-display); font-size: 1.45rem; font-weight: 700;
+  color: var(--text-bright); letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.detail-hero .hero-slug {
+  font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-dim);
+  margin-top: 5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.detail-hero .hero-desc {
+  font-size: 0.86rem; color: var(--text-dim); margin-top: 12px; max-width: 580px; line-height: 1.55;
+}
+.detail-hero .hero-btns { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+/* ---------- detail stat strip ---------- */
+.detail-stat-strip {
+  display: flex; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; margin: 18px 0; box-shadow: var(--shadow);
+}
+.detail-stat-cell { flex: 1; padding: 14px 18px; border-right: 1px solid var(--border); min-width: 0; }
+.detail-stat-cell:last-child { border-right: none; }
+.detail-stat-cell .cap {
+  font-size: 0.6rem; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 0.07em; font-weight: 600;
+}
+.detail-stat-cell .num {
+  font-family: var(--font-display); font-size: 1.15rem; font-weight: 700;
+  color: var(--text-bright); margin-top: 3px; font-variant-numeric: tabular-nums; line-height: 1.2;
+}
+.detail-stat-cell .num.accent { color: var(--accent); }
+.detail-stat-cell .sub { font-size: 0.64rem; color: var(--text-dim); margin-top: 2px; }
+@media (max-width: 820px) {
+  .detail-stat-strip { flex-wrap: wrap; }
+  .detail-stat-cell { flex: 1 1 45%; border-bottom: 1px solid var(--border); }
+}
+
+/* ---------- sticky sub-nav ---------- */
+.detail-subnav {
+  display: flex; gap: 2px; position: sticky; top: var(--topbar-h); z-index: 50;
+  background: var(--bg); border-bottom: 1px solid var(--border); margin: 0 0 18px;
+  padding-top: 6px; overflow-x: auto;
+}
+.detail-subnav::-webkit-scrollbar { height: 0; }
+.detail-subnav a {
+  padding: 9px 16px; font-size: 0.82rem; font-weight: 500; color: var(--text-dim);
+  text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s; margin-bottom: -1px;
+}
+.detail-subnav a:hover { color: var(--text); }
+.detail-subnav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ---------- detail section anchors ---------- */
+.detail-section { scroll-margin-top: calc(var(--topbar-h) + 50px); }
+
+/* ---------- provider avatar in table ---------- */
+td .avatar { vertical-align: middle; margin-right: 6px; }

@@ -317,3 +317,67 @@ def get_backend_series(model_id: str, hours: int = 168) -> dict:
             "n": r["n"],
         })
     return {"bucket_seconds": bucket_s, "series": series}
+
+
+def _table_exists(conn, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def rename_model(old_id: str, new_id: str) -> int:
+    """Rename a logical model across all tables. Returns total rows updated."""
+    _init()
+    from . import logs as _logs
+    _logs._init()
+    total = 0
+    with _db_lock:
+        with _connect() as conn:
+            cur = conn.execute(
+                "UPDATE usage SET logical_model = ? WHERE logical_model = ?",
+                (new_id, old_id),
+            )
+            total += cur.rowcount
+            if _table_exists(conn, "logs"):
+                cur = conn.execute(
+                    "UPDATE logs SET model = ? WHERE model = ?",
+                    (new_id, old_id),
+                )
+                total += cur.rowcount
+            if _table_exists(conn, "probes"):
+                cur = conn.execute(
+                    "UPDATE probes SET model_id = ? WHERE model_id = ?",
+                    (new_id, old_id),
+                )
+                total += cur.rowcount
+            conn.commit()
+    return total
+
+
+def rename_provider(old_id: str, new_id: str) -> int:
+    """Rename a provider across all tables. Returns total rows updated."""
+    _init()
+    from . import logs as _logs
+    _logs._init()
+    total = 0
+    with _db_lock:
+        with _connect() as conn:
+            cur = conn.execute(
+                "UPDATE usage SET provider = ? WHERE provider = ?",
+                (new_id, old_id),
+            )
+            total += cur.rowcount
+            if _table_exists(conn, "logs"):
+                cur = conn.execute(
+                    "UPDATE logs SET provider = ? WHERE provider = ?",
+                    (new_id, old_id),
+                )
+                total += cur.rowcount
+            if _table_exists(conn, "probes"):
+                cur = conn.execute(
+                    "UPDATE probes SET provider = ? WHERE provider = ?",
+                    (new_id, old_id),
+                )
+                total += cur.rowcount
+            conn.commit()
+    return total

@@ -5,147 +5,166 @@
 <section class="page">
   <span id="model-id" data-model-id="{{ model_id }}"></span>
   <button class="secondary" style="margin-bottom:16px" onclick="location.href='/models'">← All models</button>
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:6px">
-    <div>
-      <h1 class="page-title" id="detail-name" style="margin-bottom:2px"></h1>
-      <p class="page-sub" id="detail-desc" style="margin-bottom:0"></p>
-    </div>
-    <div id="detail-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-  </div>
 
-  <div class="card">
-    <div class="card-head">
-      <h2>Model Metadata</h2>
-      <button class="secondary" onclick="toggleMetadataEdit()" id="metadata-edit-btn">Edit</button>
-    </div>
-    <div id="metadata-display">
-      <div id="meta-grid" style="display:flex;flex-direction:column;gap:8px;font-size:0.88rem">
-        <div class="meta-row" data-field="display_name"><span style="color:var(--text-dim)">Display Name:</span> <span id="meta-display-name"></span></div>
-        <div class="meta-row" data-field="description"><span style="color:var(--text-dim)">Description:</span> <span id="meta-description"></span></div>
-        <div class="meta-row" data-field="slug"><span style="color:var(--text-dim)">Model Slug:</span> <code id="meta-slug"></code> <button class="icon-btn" style="padding:1px 5px;font-size:0.7rem;margin-left:4px" onclick="editModelSlug()" title="Edit slug">✎</button></div>
-        <div class="meta-row" data-field="modality"><span style="color:var(--text-dim)">Modality:</span> <span id="meta-modality"></span></div>
-        <div class="meta-row" data-field="max_output"><span style="color:var(--text-dim)">Max Output:</span> <span id="meta-max-output"></span></div>
-        <div class="meta-row" data-field="tags"><span style="color:var(--text-dim)">Tags:</span> <span id="meta-tags"></span></div>
-        <div class="meta-row" data-field="aliases"><span style="color:var(--text-dim)">Aliases:</span> <span id="meta-aliases"></span></div>
-        <div class="meta-row" data-field="default_params"><span style="color:var(--text-dim)">Default Params:</span> <span id="meta-default-params" style="font-family:var(--font-mono);font-size:0.82rem"></span></div>
-        <div class="meta-row" data-field="capabilities"><span style="color:var(--text-dim)">Capabilities:</span> <span id="meta-capabilities"></span></div>
+  <div class="detail-hero" id="detail-hero">
+    <span id="detail-avatar"></span>
+    <div class="hero-left">
+      <div class="hero-name" id="detail-name"></div>
+      <div class="hero-slug" id="detail-slug-row"></div>
+      <div class="hero-desc" id="detail-desc"></div>
+      <div class="hero-btns">
+        <button class="secondary" onclick="toggleMetadataEdit()" id="metadata-edit-btn">✎ Edit metadata</button>
+        <button class="secondary" id="probe-now-btn" onclick="probeModelNow()">Probe now</button>
+        <button class="secondary" onclick="location.href='/compare/{{ model_id }}'">Compare</button>
       </div>
     </div>
-    <div id="metadata-edit" class="hidden">
-      <div style="display:grid;gap:14px">
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Display Name</label>
-          <input type="text" id="edit-display-name" style="width:100%;padding:8px 12px">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Description</label>
-          <input type="text" id="edit-description" placeholder="Optional description" style="width:100%;padding:8px 12px">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Modality</label>
-          <select id="edit-modality" style="width:100%;padding:8px 12px">
-            <option value="">None</option>
-            <option value="text">Text</option>
-            <option value="text+vision">Text + Vision</option>
-            <option value="multimodal">Multimodal</option>
+  </div>
+
+  <div class="detail-stat-strip" id="detail-stat-strip"></div>
+
+  <nav class="detail-subnav" id="detail-subnav">
+    <a href="#providers" class="active" data-anchor="providers">Providers</a>
+    <a href="#metadata" data-anchor="metadata">Metadata</a>
+    <a href="#chart" data-anchor="chart">Throughput</a>
+  </nav>
+
+  <section id="providers" class="detail-section">
+    <div class="card">
+      <div class="card-head">
+        <h2>Provider Config</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:0.76rem;color:var(--text-dim)">Percentile</span>
+          <select id="detail-p" onchange="reloadModelDetail()" style="width:auto;padding:5px 8px;font-size:0.8rem">
+            <option value="p50">P50</option>
+            <option value="p90">P90</option>
+            <option value="p99">P99</option>
           </select>
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Max Output Tokens</label>
-          <input type="number" id="edit-max-output" style="width:100%;padding:8px 12px">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Tags (comma-separated)</label>
-          <input type="text" id="edit-tags" placeholder="fast,cheap,smart" style="width:100%;padding:8px 12px">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Aliases (comma-separated)</label>
-          <input type="text" id="edit-aliases" placeholder="gpt-4,gpt4" style="width:100%;padding:8px 12px">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Default Params (JSON)</label>
-          <textarea id="edit-default-params" rows="3" placeholder='{"temperature":0.7,"max_tokens":2048}' style="width:100%;padding:8px 12px;font-family:var(--font-mono);font-size:0.82rem"></textarea>
-        </div>
-        <div>
-          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:6px">Capabilities</label>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-text"> Text</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-vision"> Vision</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-audio"> Audio</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-tools"> Tools</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-json_mode"> JSON Mode</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-parallel_tool_calls"> Parallel Tools</label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-streaming"> Streaming</label>
+          <div class="seg" id="detail-range">
+            <button class="active" onclick="setDetailRange(24, this)">24h</button>
+            <button onclick="setDetailRange(168, this)">7d</button>
+            <button onclick="setDetailRange(720, this)">30d</button>
           </div>
         </div>
-        <div style="display:flex;gap:10px;justify-content:flex-end">
-          <button class="secondary" onclick="toggleMetadataEdit()">Cancel</button>
-          <button class="primary" onclick="saveModelMetadata()">Save</button>
+      </div>
+      <table id="detail-table">
+        <thead><tr>
+          <th style="width:30px"></th>
+          <th data-col="priority" onclick="sortDetail('priority')">Tier</th>
+          <th data-col="backend" onclick="sortDetail('backend')">Provider</th>
+          <th data-col="context_length" onclick="sortDetail('context_length')">Context</th>
+          <th data-col="max_output_tokens" onclick="sortDetail('max_output_tokens')">Max Out</th>
+          <th data-col="input_price" onclick="sortDetail('input_price')">$/M In</th>
+          <th data-col="output_price" onclick="sortDetail('output_price')">$/M Out</th>
+          <th data-col="cache_read_price" onclick="sortDetail('cache_read_price')">$/M Cache</th>
+          <th data-col="ttft_ms" onclick="sortDetail('ttft_ms')">TTFT</th>
+          <th data-col="tps" onclick="sortDetail('tps')">Throughput</th>
+          <th data-col="latency_ms" onclick="sortDetail('latency_ms')">Latency</th>
+          <th data-col="success_rate" onclick="sortDetail('success_rate')">Uptime</th>
+          <th data-col="requests" onclick="sortDetail('requests')">Reqs</th>
+          <th style="width:36px"></th>
+        </tr></thead>
+        <tbody id="detail-rows"></tbody>
+      </table>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="secondary" onclick="addNewTier()">+ Add Tier</button>
+        <button class="secondary" onclick="showAddBackendModal()">+ Add Provider</button>
+        <span style="font-size:0.72rem;color:var(--text-dim)">Drag rows to reorder. Same tier shares traffic.</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="metadata" class="detail-section">
+    <div class="card">
+      <div class="card-head">
+        <h2>Model Metadata</h2>
+      </div>
+      <div id="metadata-display">
+        <div id="meta-grid" style="display:flex;flex-direction:column;gap:8px;font-size:0.88rem">
+          <div class="meta-row" data-field="display_name"><span style="color:var(--text-dim)">Display Name:</span> <span id="meta-display-name"></span></div>
+          <div class="meta-row" data-field="description"><span style="color:var(--text-dim)">Description:</span> <span id="meta-description"></span></div>
+          <div class="meta-row" data-field="slug"><span style="color:var(--text-dim)">Model Slug:</span> <code id="meta-slug"></code> <button class="icon-btn" style="padding:1px 5px;font-size:0.7rem;margin-left:4px" onclick="editModelSlug()" title="Edit slug">✎</button></div>
+          <div class="meta-row" data-field="modality"><span style="color:var(--text-dim)">Modality:</span> <span id="meta-modality"></span></div>
+          <div class="meta-row" data-field="max_output"><span style="color:var(--text-dim)">Max Output:</span> <span id="meta-max-output"></span></div>
+          <div class="meta-row" data-field="tags"><span style="color:var(--text-dim)">Tags:</span> <span id="meta-tags"></span></div>
+          <div class="meta-row" data-field="aliases"><span style="color:var(--text-dim)">Aliases:</span> <span id="meta-aliases"></span></div>
+          <div class="meta-row" data-field="default_params"><span style="color:var(--text-dim)">Default Params:</span> <span id="meta-default-params" style="font-family:var(--font-mono);font-size:0.82rem"></span></div>
+          <div class="meta-row" data-field="capabilities"><span style="color:var(--text-dim)">Capabilities:</span> <span id="meta-capabilities"></span></div>
+        </div>
+      </div>
+      <div id="metadata-edit" class="hidden">
+        <div style="display:grid;gap:14px">
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Display Name</label>
+            <input type="text" id="edit-display-name" style="width:100%;padding:8px 12px">
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Description</label>
+            <input type="text" id="edit-description" placeholder="Optional description" style="width:100%;padding:8px 12px">
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Modality</label>
+            <select id="edit-modality" style="width:100%;padding:8px 12px">
+              <option value="">None</option>
+              <option value="text">Text</option>
+              <option value="text+vision">Text + Vision</option>
+              <option value="multimodal">Multimodal</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Max Output Tokens</label>
+            <input type="number" id="edit-max-output" style="width:100%;padding:8px 12px">
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Tags (comma-separated)</label>
+            <input type="text" id="edit-tags" placeholder="fast,cheap,smart" style="width:100%;padding:8px 12px">
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Aliases (comma-separated)</label>
+            <input type="text" id="edit-aliases" placeholder="gpt-4,gpt4" style="width:100%;padding:8px 12px">
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Default Params (JSON)</label>
+            <textarea id="edit-default-params" rows="3" placeholder='{"temperature":0.7,"max_tokens":2048}' style="width:100%;padding:8px 12px;font-family:var(--font-mono);font-size:0.82rem"></textarea>
+          </div>
+          <div>
+            <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:6px">Capabilities</label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-text"> Text</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-vision"> Vision</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-audio"> Audio</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-tools"> Tools</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-json_mode"> JSON Mode</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-parallel_tool_calls"> Parallel Tools</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem"><input type="checkbox" id="cap-streaming"> Streaming</label>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button class="secondary" onclick="toggleMetadataEdit()">Cancel</button>
+            <button class="primary" onclick="saveModelMetadata()">Save</button>
+          </div>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <div class="card">
-    <div class="card-head">
-      <h2>Provider Config</h2>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="secondary" id="probe-now-btn" onclick="probeModelNow()">Probe now</button>
-        <span style="font-size:0.76rem;color:var(--text-dim)">Percentile</span>
-        <select id="detail-p" onchange="reloadModelDetail()" style="width:auto;padding:5px 8px;font-size:0.8rem">
-          <option value="p50">P50</option>
-          <option value="p90">P90</option>
-          <option value="p99">P99</option>
-        </select>
-        <div class="seg" id="detail-range">
-          <button class="active" onclick="setDetailRange(24, this)">24h</button>
-          <button onclick="setDetailRange(168, this)">7d</button>
-          <button onclick="setDetailRange(720, this)">30d</button>
+  <section id="chart" class="detail-section">
+    <div class="card">
+      <div class="card-head">
+        <h2>Throughput over time <span style="font-weight:400;color:var(--text-dim);font-size:0.78rem">(tokens/sec per provider)</span></h2>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input type="number" id="chart-hours" min="1" max="2160" value="24" style="width:64px;padding:4px 6px;font-size:0.78rem" title="Hours to display" onchange="setChartHours(this.value)">
+          <span style="font-size:0.76rem;color:var(--text-dim)">h</span>
+          <span style="width:1px;height:18px;background:var(--border);margin:0 4px"></span>
+          <span style="font-size:0.76rem;color:var(--text-dim)">Y:</span>
+          <input type="number" id="chart-ymin" min="0" placeholder="0" style="width:56px;padding:4px 6px;font-size:0.78rem" title="Y-axis min" onchange="setChartYRange()">
+          <span style="font-size:0.76rem;color:var(--text-dim)">–</span>
+          <input type="number" id="chart-ymax" min="1" placeholder="2000" style="width:64px;padding:4px 6px;font-size:0.78rem" title="Y-axis max (blank=auto)" onchange="setChartYRange()">
+          <button class="secondary" style="padding:4px 10px;font-size:0.76rem" onclick="resetChartControls()">Reset</button>
         </div>
       </div>
+      <div id="detail-chart"></div>
     </div>
-    <table id="detail-table">
-      <thead><tr>
-        <th style="width:30px"></th>
-        <th data-col="priority" onclick="sortDetail('priority')">Tier</th>
-        <th data-col="backend" onclick="sortDetail('backend')">Provider</th>
-        <th data-col="context_length" onclick="sortDetail('context_length')">Context</th>
-        <th data-col="max_output_tokens" onclick="sortDetail('max_output_tokens')">Max Out</th>
-        <th data-col="input_price" onclick="sortDetail('input_price')">$/M In</th>
-        <th data-col="output_price" onclick="sortDetail('output_price')">$/M Out</th>
-        <th data-col="cache_read_price" onclick="sortDetail('cache_read_price')">$/M Cache</th>
-        <th data-col="ttft_ms" onclick="sortDetail('ttft_ms')">TTFT</th>
-        <th data-col="tps" onclick="sortDetail('tps')">Throughput</th>
-        <th data-col="latency_ms" onclick="sortDetail('latency_ms')">Latency</th>
-        <th data-col="success_rate" onclick="sortDetail('success_rate')">Uptime</th>
-        <th data-col="requests" onclick="sortDetail('requests')">Reqs</th>
-        <th style="width:36px"></th>
-      </tr></thead>
-      <tbody id="detail-rows"></tbody>
-    </table>
-    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
-      <button class="secondary" onclick="addNewTier()">+ Add Tier</button>
-      <button class="secondary" onclick="showAddBackendModal()">+ Add Provider</button>
-      <span style="font-size:0.72rem;color:var(--text-dim)">Drag rows to reorder. Same tier shares traffic.</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-head">
-      <h2>Throughput over time <span style="font-weight:400;color:var(--text-dim);font-size:0.78rem">(tokens/sec per provider)</span></h2>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <input type="number" id="chart-hours" min="1" max="2160" value="24" style="width:64px;padding:4px 6px;font-size:0.78rem" title="Hours to display" onchange="setChartHours(this.value)">
-        <span style="font-size:0.76rem;color:var(--text-dim)">h</span>
-        <span style="width:1px;height:18px;background:var(--border);margin:0 4px"></span>
-        <span style="font-size:0.76rem;color:var(--text-dim)">Y:</span>
-        <input type="number" id="chart-ymin" min="0" placeholder="0" style="width:56px;padding:4px 6px;font-size:0.78rem" title="Y-axis min" onchange="setChartYRange()">
-        <span style="font-size:0.76rem;color:var(--text-dim)">–</span>
-        <input type="number" id="chart-ymax" min="1" placeholder="2000" style="width:64px;padding:4px 6px;font-size:0.78rem" title="Y-axis max (blank=auto)" onchange="setChartYRange()">
-        <button class="secondary" style="padding:4px 10px;font-size:0.76rem" onclick="resetChartControls()">Reset</button>
-      </div>
-    </div>
-    <div id="detail-chart"></div>
-  </div>
+  </section>
 </section>
 
 <button id="routing-help-btn" onclick="toggleRoutingHelp()" title="Routing guide">?</button>

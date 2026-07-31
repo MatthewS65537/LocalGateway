@@ -18,6 +18,9 @@ class ServerConfig(BaseModel):
     probe_interval_s: float = 3600.0
     probe_max_tokens: int = 64
     chart_enabled: bool = True
+    cache_affinity_enabled: bool = False
+    cache_affinity_ttl_sec: int = 300
+    max_inflight_before_spill: int | None = None
 
 
 class ProviderConfig(BaseModel):
@@ -30,6 +33,7 @@ class ProviderConfig(BaseModel):
     enabled: bool = True
     stream_idle_timeout: float | None = 60.0
     reasoning_mode: str = "auto"  # auto (dual-emit) | passthrough
+    avatar: str = ""  # custom avatar text; empty = first letter of id
 
 
 class BackendConfig(BaseModel):
@@ -39,6 +43,7 @@ class BackendConfig(BaseModel):
     enabled: bool = True
     context_length: int | None = None
     max_output_tokens: int | None = None
+    cache_supported: bool | None = None
 
 
 class ModelConfig(BaseModel):
@@ -54,6 +59,7 @@ class ModelConfig(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     default_params: dict[str, Any] = Field(default_factory=dict)
     display_name: str = ""
+    avatar: str = ""  # custom avatar text; empty = first letter of id/display_name
 
 
 class PricingEntry(BaseModel):

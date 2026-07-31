@@ -33,6 +33,7 @@ async function loadHealth() {
       const st = stats[key] || {};
       let badge;
       if (!b.enabled || !b.provider_enabled) badge = '<span class="badge badge-gray">disabled</span>';
+      else if (b.cooldown_remaining === -1) badge = '<span class="badge badge-gray">snoozed</span>';
       else if (b.cooldown_remaining > 0) badge = '<span class="badge badge-yellow">rate-limited '+b.cooldown_remaining.toFixed(0)+'s</span>';
       else badge = '<span class="badge badge-green">available</span>';
       const lat = st.avg_latency_ms != null ? fmt(st.avg_latency_ms,0)+'ms' : '—';
@@ -46,7 +47,7 @@ async function loadHealth() {
     }).join('');
     healthEl.innerHTML = rows || '<div class="empty">No providers configured</div>';
     const rl = Object.entries(data.rate_limits||{}).map(([k,v]) =>
-      '<div class="provider-row"><div class="provider-info"><code>'+esc(k)+'</code></div><span class="badge badge-yellow">'+v.toFixed(0)+'s left</span></div>').join('');
+      '<div class="provider-row"><div class="provider-info"><code>'+esc(k)+'</code></div><span class="badge '+(v < 0 ? 'badge-gray">snoozed' : 'badge-yellow">'+v.toFixed(0)+'s left')+'</span></div>').join('');
     rlEl.innerHTML = rl || '<div class="empty">No active rate limits</div>';
   } catch(e) {
     healthEl.innerHTML = '<div class="notice">Gateway is stopped.</div>';

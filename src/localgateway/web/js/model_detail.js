@@ -12,18 +12,41 @@ function tierColorForTier(tierNum) {
   return TIER_HUES[idx];
 }
 
+function fmtPricePrecise(p) {
+  if (p == null) return '—';
+  return '$' + (p * 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
 function shadeForBackend(tierNum, backendIndexInTier, totalInTier) {
   const tc = tierColorForTier(tierNum);
   if (totalInTier <= 1) return tc.base;
   const t = totalInTier === 1 ? 0.5 : backendIndexInTier / (totalInTier - 1);
-  const lightness = 62 - t * 28;
-  const sat = 68 + t * 12;
+  // Keep lightness in a readable band; vary saturation for distinction so
+  // shaded text never drops too dark to read on either theme.
+  const lightness = 64 - t * 12;
+  const sat = 64 + t * 22;
   return `hsl(${tc.h}, ${sat}%, ${lightness}%)`;
 }
 
 function tierBgForTier(tierNum) {
   const tc = tierColorForTier(tierNum);
   return `hsla(${tc.h}, 70%, 60%, 0.08)`;
+}
+
+// Context range for the stat strip: min–max across active (enabled, non-snoozed)
+// backends. A model-level context_length override is shown as-is. Falls back to
+// all enabled backends when every active one is snoozed.
+function computeContextRange(cfgModel, backends) {
+  if (cfgModel.context_length) return fmtTokens(cfgModel.context_length);
+  const isActive = b => b.enabled && !(b.cooldown_remaining && b.cooldown_remaining !== 0);
+  let pool = backends.filter(isActive);
+  if (!pool.length) pool = backends.filter(b => b.enabled);
+  const ctxs = pool.map(b => b.context_length).filter(v => v);
+  if (!ctxs.length) return '—';
+  const lo = Math.min(...ctxs);
+  const hi = Math.max(...ctxs);
+  if (lo === hi) return fmtTokens(hi);
+  return fmtTokens(lo) + '–' + fmtTokens(hi);
 }
 
 function buildBackendColorMap(backends) {
@@ -58,18 +81,52 @@ function loadModelDetailPage(id) {
   startInflightPolling();
   document.getElementById('detail-rows').onclick = function(ev) {
     const dot = ev.target.closest('.routing-dot');
-    if (dot) {
+    if (!dot) return;
+    if (dot.classList.contains('snoozed')) {
+      showUnsnoozeConfirm(dot.dataset.provider, dot.dataset.model);
+    } else {
       showSnoozeModal(dot.dataset.provider, dot.dataset.model);
     }
   };
+  initSubnavScrollSpy();
+}
+
+function initSubnavScrollSpy() {
+  const nav = document.getElementById('detail-subnav');
+  if (!nav) return;
+  const links = nav.querySelectorAll('a');
+  links.forEach(link => {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      const anchor = this.dataset.anchor;
+      const target = document.getElementById(anchor);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      links.forEach(l => l.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+  const sections = ['providers', 'metadata', 'chart'].map(id => document.getElementById(id)).filter(Boolean);
+  if (!sections.length) return;
+  let scrollTimer = null;
+  window.addEventListener('scroll', function() {
+    if (scrollTimer) return;
+    scrollTimer = setTimeout(() => {
+      scrollTimer = null;
+      const scrollY = window.scrollY + 120;
+      let current = sections[0];
+      for (const s of sections) {
+        if (s.offsetTop <= scrollY) current = s;
+      }
+      links.forEach(l => l.classList.toggle('active', l.dataset.anchor === current.id));
+    }, 80);
+  }, { passive: true });
 }
 
 let _inflightTimer = null;
 function startInflightPolling() {
   stopInflightPolling();
-  _inflightTimer = setInterval(async () => { await pollInflight(); await pollSnooze(); }, 2000);
+  _inflightTimer = setInterval(pollInflight, 2000);
   pollInflight();
-  pollSnooze();
 }
 function stopInflightPolling() {
   if (_inflightTimer) { clearInterval(_inflightTimer); _inflightTimer = null; }
@@ -84,33 +141,35 @@ async function pollInflight() {
 }
 function updateInflightIndicators() {
   const inflight = modelDetailState.inflight || {};
-  const snoozed = modelDetailState.snoozed || {};
   document.querySelectorAll('#detail-rows tr').forEach(tr => {
     const key = tr.dataset.provider + ':' + tr.dataset.model;
     const dot = tr.querySelector('.routing-dot');
     if (!dot) return;
-    const isSnoozed = (snoozed[key] || 0) > 0;
     const active = (inflight[key] || 0) > 0;
-    dot.classList.toggle('active', active && !isSnoozed);
-    dot.classList.toggle('snoozed', isSnoozed);
-    if (isSnoozed) {
-      const remaining = snoozed[key] || 0;
-      dot.title = 'Snoozed (' + Math.ceil(remaining) + 's left). Click to unsnooze.';
-    } else if (active) {
-      dot.title = 'Routing request in progress. Click to snooze.';
-    } else {
-      dot.title = 'Idle. Click to snooze.';
-    }
+    dot.classList.toggle('active', active);
   });
 }
 
-function showSnoozeModal(provider, model) {
-  const key = provider + ':' + model;
-  const snoozed = (modelDetailState.snoozed || {})[key] || 0;
+function showUnsnoozeConfirm(provider, model) {
   const modal = document.createElement('div');
   modal.className = 'snooze-modal';
   modal.style.cssText = 'display:flex;align-items:center;justify-content:center;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:1001';
-  const presets = [300, 900, 1800, 3600, 7200, 14400];
+  modal.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:340px;max-width:90vw;text-align:center">
+      <h3 style="margin:0 0 8px"><code>${esc(provider)}:${esc(model)}</code></h3>
+      <p style="font-size:0.85rem;color:var(--text-dim);margin:0 0 20px">This backend is currently snoozed.</p>
+      <button class="primary" style="width:100%;padding:12px;font-size:0.9rem" onclick="unsnoozeBackend('${esc(provider)}','${esc(model)}',this)">Unsnooze</button>
+      <button class="secondary" style="width:100%;padding:10px;margin-top:10px" onclick="this.closest('.snooze-modal').remove()">Cancel</button>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+}
+
+function showSnoozeModal(provider, model) {
+  const modal = document.createElement('div');
+  modal.className = 'snooze-modal';
+  modal.style.cssText = 'display:flex;align-items:center;justify-content:center;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:1001';
+  const presets = [300, 900, 1800, 3600, 7200, 14400, 86400, 604800];
   modal.innerHTML = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:400px;max-width:90vw">
       <h3 style="margin:0 0 4px">Snooze — <code>${esc(provider)}:${esc(model)}</code></h3>
@@ -119,10 +178,10 @@ function showSnoozeModal(provider, model) {
         ${presets.map(s => '<button class="secondary snooze-preset" data-s="'+s+'" style="padding:8px 14px;font-size:0.82rem">'+fmtSnoozeDuration(s)+'</button>').join('')}
       </div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
-        <input type="number" id="snooze-custom" min="1" placeholder="Custom (s)" style="width:120px;padding:8px 10px;font-size:0.85rem">
+        <input type="text" id="snooze-custom" placeholder="e.g. 1d 2h 30m 15s" style="width:200px;padding:8px 10px;font-size:0.85rem;font-family:var(--font-mono)">
         <button class="secondary" onclick="snoozeBackend('${esc(provider)}','${esc(model)}',null,this)">Snooze custom</button>
       </div>
-      ${snoozed > 0 ? '<button class="secondary" style="width:100%;padding:10px;color:var(--red);border-color:var(--red)" onclick="unsnoozeBackend(\''+esc(provider)+'\',\''+esc(model)+'\',this)">Remove snooze ('+Math.ceil(snoozed)+'s remaining)</button>' : ''}
+      <button class="secondary" style="width:100%;padding:10px" onclick="snoozeBackendPermanent('${esc(provider)}','${esc(model)}',this)">Snooze until manually removed</button>
       <div style="display:flex;justify-content:flex-end;margin-top:18px">
         <button class="secondary" onclick="this.closest('.snooze-modal').remove()">Cancel</button>
       </div>
@@ -134,23 +193,68 @@ function showSnoozeModal(provider, model) {
   });
 }
 
+function parseDuration(str) {
+  if (!str) return null;
+  const units = { w: 604800, d: 86400, h: 3600, m: 60, s: 1 };
+  const re = /(\d+)\s*([wdhms])/gi;
+  let total = 0, matched = false;
+  let m;
+  while ((m = re.exec(str)) !== null) {
+    matched = true;
+    total += parseInt(m[1], 10) * units[m[2].toLowerCase()];
+  }
+  return matched ? total : null;
+}
+
 function fmtSnoozeDuration(s) {
-  if (s >= 3600) return (s / 3600) + 'h';
-  if (s >= 60) return (s / 60) + 'm';
-  return s + 's';
+  if (s <= 0) return '0s';
+  const weeks = Math.floor(s / 604800); s %= 604800;
+  const days = Math.floor(s / 86400); s %= 86400;
+  const hours = Math.floor(s / 3600); s %= 3600;
+  const mins = Math.floor(s / 60); s %= 60;
+  const parts = [];
+  if (weeks) parts.push(weeks + 'w');
+  if (days) parts.push(days + 'd');
+  if (hours) parts.push(hours + 'h');
+  if (mins) parts.push(mins + 'm');
+  if (s) parts.push(Math.round(s) + 's');
+  return parts.join(' ') || '0s';
+}
+
+function fmtSnoozeDurationRounded(s) {
+  if (s < 0) return 'snoozed';
+  const weeks = Math.floor(s / 604800); s %= 604800;
+  const days = Math.floor(s / 86400); s %= 86400;
+  const hours = Math.floor(s / 3600); s %= 3600;
+  const mins = Math.round(s / 60);
+  const parts = [];
+  if (weeks) parts.push(weeks + 'w');
+  if (days) parts.push(days + 'd');
+  if (hours) parts.push(hours + 'h');
+  if (mins) parts.push(mins + 'm');
+  return parts.join(' ') || '<1m';
 }
 
 async function snoozeBackend(provider, model, seconds, btn) {
   if (seconds == null) {
     const input = document.getElementById('snooze-custom');
-    seconds = parseInt(input && input.value, 10);
+    seconds = parseDuration(input && input.value);
   }
-  if (!seconds || seconds < 1) { toast('Enter a valid duration', 'error'); return; }
+  if (!seconds || seconds < 1) { toast('Enter a valid duration (e.g. 1d 2h 30m)', 'error'); return; }
   try {
     await fetchJSON('/admin/backends/snooze', { method: 'POST', body: JSON.stringify({ provider, model, seconds }) });
     toast('Snoozed for ' + fmtSnoozeDuration(seconds), 'success');
     btn.closest('.snooze-modal').remove();
-    await pollSnooze();
+    await reloadModelDetail();
+  } catch(e) { toast('Failed to snooze: ' + e.message, 'error'); }
+}
+
+async function snoozeBackendPermanent(provider, model, btn) {
+  try {
+    await fetchJSON('/admin/backends/snooze', { method: 'POST', body: JSON.stringify({ provider, model, permanent: true }) });
+    toast('Snoozed until manually removed', 'success');
+    btn.closest('.snooze-modal').remove();
+    await reloadModelDetail();
   } catch(e) { toast('Failed to snooze: ' + e.message, 'error'); }
 }
 
@@ -158,17 +262,9 @@ async function unsnoozeBackend(provider, model, btn) {
   try {
     await fetchJSON('/admin/backends/unsnooze', { method: 'POST', body: JSON.stringify({ provider, model }) });
     toast('Snooze removed', 'success');
-    btn.closest('.snooze-modal').remove();
-    await pollSnooze();
+    if (btn && btn.closest) btn.closest('.snooze-modal')?.remove();
+    await reloadModelDetail();
   } catch(e) { toast('Failed to unsnooze: ' + e.message, 'error'); }
-}
-
-async function pollSnooze() {
-  try {
-    const { data } = await fetchJSON('/admin/rate-limits');
-    modelDetailState.snoozed = data || {};
-    updateInflightIndicators();
-  } catch(e) {}
 }
 function setDetailRange(hours, btn) {
   modelDetailState.hours = hours;
@@ -189,7 +285,23 @@ async function reloadModelDetail() {
   const p = document.getElementById('detail-p').value;
   modelDetailState.p = p;
   const cfgModel = (currentConfig && currentConfig.models || []).find(m => m.id === id) || {};
-  document.getElementById('detail-name').innerHTML = '<code>'+esc(id)+'</code>';
+  const disabled = cfgModel.enabled === false;
+
+  // ---- Hero header ----
+  const avatarEl = document.getElementById('detail-avatar');
+  if (avatarEl) {
+    avatarEl.innerHTML = modelAvatar(id, cfgModel.display_name, 48, cfgModel.avatar);
+    avatarEl.style.cursor = 'pointer';
+    avatarEl.title = 'Click to edit icon';
+    avatarEl.onclick = () => editModelAvatar();
+  }
+  document.getElementById('detail-name').innerHTML =
+    '<span>' + esc(cfgModel.display_name || id) + '</span>'
+    + (disabled ? ' <span class="badge badge-gray">disabled</span>' : '');
+  document.getElementById('detail-slug-row').innerHTML =
+    '<code>' + esc(id) + '</code>'
+    + '<button class="copy-btn" onclick="copyId(\''+esc(id)+'\',this)" title="Copy model ID">⧉</button>'
+    + '<span style="color:var(--text-dim);font-size:0.72rem">· '+((cfgModel.backends || []).filter(b=>b.enabled!==false).length)+' backends</span>';
   document.getElementById('detail-desc').textContent = cfgModel.description || '';
 
   // Update metadata display
@@ -214,8 +326,7 @@ async function reloadModelDetail() {
   const enabledCaps = Object.entries(caps).filter(([k, v]) => v).map(([k]) => k).join(', ');
   setMeta('capabilities', enabledCaps, 'meta-capabilities');
 
-  const chips = [];
-  if (cfgModel.context_length) chips.push(['Context', fmtTokens(cfgModel.context_length)]);
+  // ---- Stat strip ----
   const chartEnabled = currentConfig && currentConfig.server && currentConfig.server.chart_enabled !== false;
   const chartCard = document.getElementById('detail-chart').parentElement;
   if (chartCard) chartCard.style.display = chartEnabled ? '' : 'none';
@@ -233,21 +344,37 @@ async function reloadModelDetail() {
     if (chartEnabled) renderTpsChart(detailSeriesCache);
     const bs = statsR.data.backends || [];
     const priced = bs.filter(b => b.input_price || b.output_price);
-    if (priced.length) chips.push(['In / Out $/M', fmtPrice(Math.min(...priced.map(b=>b.input_price)))+' / '+fmtPrice(Math.min(...priced.map(b=>b.output_price)))]);
+    const priceStr = priced.length ? fmtPricePrecise(Math.min(...priced.map(b=>b.input_price)))+' / '+fmtPricePrecise(Math.min(...priced.map(b=>b.output_price))) : '—';
     const p50Vals = bs.map(b => b.tps_p50).filter(v => v != null);
-    if (p50Vals.length) chips.push(['Best TPS P50', fmt(Math.max(...p50Vals), 0)]);
-    const p90Vals = bs.map(b => b.tps_p90).filter(v => v != null);
-    if (p90Vals.length) chips.push(['Best TPS P90', fmt(Math.max(...p90Vals), 0)]);
-    const p99Vals = bs.map(b => b.tps_p99).filter(v => v != null);
-    if (p99Vals.length) chips.push(['Best TPS P99', fmt(Math.max(...p99Vals), 0)]);
+    const bestP50 = p50Vals.length ? fmt(Math.max(...p50Vals), 0) : '—';
+    const ctxStr = computeContextRange(cfgModel, bs);
+    const successVals = bs.map(b => b.success_rate).filter(v => v != null);
+    const uptimeStr = successVals.length ? Math.min(...successVals).toFixed(1)+'%' : '—';
+    renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr);
   } catch(e) {
     document.getElementById('detail-rows').innerHTML = '<tr><td colspan="14" class="empty">Gateway is stopped — start it to see live stats.</td></tr>';
     document.getElementById('detail-chart').innerHTML = '<div class="empty">No data.</div>';
+    renderDetailStatStrip(cfgModel, '—', '—', '—', '—');
   }
-  document.getElementById('detail-chips').innerHTML = chips.map(([l, v]) =>
-    '<div style="padding:8px 14px;background:var(--surface);border:1px solid var(--border);border-radius:9px">'
-    + '<div style="font-size:0.64rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em">'+l+'</div>'
-    + '<div style="font-family:var(--font-display);font-weight:600;color:var(--text-bright)">'+v+'</div></div>').join('');
+}
+
+function renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr) {
+  const el = document.getElementById('detail-stat-strip');
+  if (!el) return;
+  const cells = [
+    { cap: 'Modality', num: cfgModel.modality || '—' },
+    { cap: 'In / Out', num: priceStr, sub: 'per 1M tokens' },
+    { cap: 'Context', num: ctxStr },
+    { cap: 'Best TPS P50', num: bestP50, accent: true, sub: 'tokens/sec' },
+    { cap: 'Uptime', num: uptimeStr },
+  ];
+  el.innerHTML = cells.map(c =>
+    '<div class="detail-stat-cell">'
+    + '<div class="cap">'+c.cap+'</div>'
+    + '<div class="num'+(c.accent?' accent':'')+'">'+c.num+'</div>'
+    + (c.sub ? '<div class="sub">'+c.sub+'</div>' : '')
+    + '</div>'
+  ).join('');
 }
 
 function toggleMetadataEdit() {
@@ -351,7 +478,7 @@ async function editModelSlug() {
   modal.innerHTML = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:420px;max-width:90vw">
       <h3 style="margin:0 0 8px">Edit Model Slug</h3>
-      <p style="font-size:0.78rem;color:var(--text-dim);margin:0 0 16px">Changing the slug will update the model ID. Existing usage data will remain under the old ID.</p>
+      <p style="font-size:0.78rem;color:var(--text-dim);margin:0 0 16px">Changing the slug will update the model ID and migrate all existing usage data to the new ID.</p>
       <input type="text" id="slug-input" value="${esc(oldId)}" style="width:100%;padding:8px 10px;font-family:var(--font-mono)">
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
         <button class="secondary" onclick="this.closest('.command-palette').remove()">Cancel</button>
@@ -369,22 +496,75 @@ async function saveModelSlug(oldId, btn) {
   if (!newId || newId === oldId) { btn.closest('.command-palette').remove(); return; }
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const cfg = currentConfig || (await fetchJSON('/admin/config')).data;
-    const model = cfg.models.find(m => m.id === oldId);
-    if (!model) { toast('Model not found', 'error'); return; }
-    model.id = newId;
-    const r = await fetch('/admin/config', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cfg) });
+    const r = await fetch('/admin/rename', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ type: 'model', old_id: oldId, new_id: newId }),
+    });
+    const res = r.ok ? await r.json() : null;
     if (r.ok) {
-      toast('Slug updated', 'success');
+      const msg = res && res.usage_rows_updated
+        ? 'Slug updated (' + res.usage_rows_updated + ' usage rows migrated)'
+        : 'Slug updated';
+      toast(msg, 'success');
       btn.closest('.command-palette').remove();
       location.href = '/models/' + encodeURIComponent(newId);
     } else {
-      toast('Failed to update slug', 'error');
+      const err = res && res.error ? res.error : 'Failed to update slug';
+      toast(err, 'error');
     }
   } catch(e) {
     toast('Error: ' + e.message, 'error');
   }
   btn.disabled = false; btn.textContent = 'Save';
+}
+
+// ---------- model avatar editor ----------
+function editModelAvatar() {
+  const id = modelDetailState.id;
+  if (!id) return;
+  const cfgModel = (currentConfig && currentConfig.models || []).find(m => m.id === id) || {};
+  const current = cfgModel.avatar || '';
+  const previewId = 'avatar-preview';
+  const renderPreview = () => {
+    const v = (document.getElementById('avatar-text-input') || {}).value || '';
+    document.getElementById(previewId).innerHTML = modelAvatar(id, cfgModel.display_name, 48, v);
+  };
+  const overlay = openModal({
+    title: 'Edit Model Icon',
+    bodyHtml:
+      '<p class="modal-sub">Custom text to show in this model\'s avatar tile. Leave blank to use the first letter of the display name / ID. Longer text auto-shrinks to fit.</p>' +
+      '<div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">' +
+        '<div id="'+previewId+'" style="flex-shrink:0"></div>' +
+        '<div style="flex:1"><input type="text" id="avatar-text-input" maxlength="12" value="'+esc(current)+'" placeholder="e.g. GPT-4o, Claude, 4o-mini" style="width:100%;padding:8px 12px"></div>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="secondary" onclick="clearModelAvatar()">Reset to default</button>' +
+        '<button class="secondary" data-act="cancel">Cancel</button>' +
+        '<button class="primary" data-act="save">Save</button>' +
+      '</div>',
+  });
+  renderPreview();
+  document.getElementById('avatar-text-input').addEventListener('input', renderPreview);
+  overlay.querySelector('[data-act="cancel"]').onclick = () => closeModal(overlay);
+  overlay.querySelector('[data-act="save"]').onclick = async () => {
+    const v = document.getElementById('avatar-text-input').value;
+    try {
+      const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ avatar: v }) });
+      if (ok) {
+        toast('Model icon updated', 'success');
+        closeModal(overlay);
+        currentConfig = (await fetchJSON('/admin/config')).data;
+        await reloadModelDetail();
+      } else {
+        toast('Failed to update icon', 'error');
+      }
+    } catch(e) { toast('Error: ' + e.message, 'error'); }
+  };
+  // expose clear for inline button
+  window.clearModelAvatar = () => {
+    document.getElementById('avatar-text-input').value = '';
+    renderPreview();
+  };
 }
 
 async function probeModelNow() {
@@ -395,9 +575,19 @@ async function probeModelNow() {
   const cfgModel = (currentConfig && currentConfig.models || []).find(m => m.id === id);
   if (!cfgModel) { if (btn) { btn.disabled = false; btn.textContent = 'Probe now'; } return; }
 
+  const snoozedKeys = new Set();
+  if (detailStats && detailStats.backends) {
+    for (const b of detailStats.backends) {
+      if (b.cooldown_remaining && b.cooldown_remaining !== 0) {
+        snoozedKeys.add(b.provider + ':' + (b.backend_model || b.model));
+      }
+    }
+  }
+
   const results = [];
   for (const b of cfgModel.backends) {
     if (!b.enabled) { results.push({provider: b.provider, model: b.model, priority: b.priority, ok: false, skipped: true}); continue; }
+    if (snoozedKeys.has(b.provider + ':' + b.model)) { results.push({provider: b.provider, model: b.model, priority: b.priority, ok: false, skipped: true, error: 'snoozed'}); continue; }
     try {
       const r = await fetch('/admin/backends/test', {
         method: 'POST',
@@ -410,6 +600,7 @@ async function probeModelNow() {
         model: b.model,
         priority: b.priority,
         ok: d.ok || false,
+        skipped: d.skipped || false,
         ttft_ms: d.ttft_ms,
         latency_ms: d.latency_ms,
         tps: d.tps,
@@ -424,8 +615,9 @@ async function probeModelNow() {
   if (btn) { btn.disabled = false; btn.textContent = 'Probe now'; }
 
   const okCount = results.filter(r => r.ok).length;
-  const failCount = results.length - okCount;
-  toast(`Probed ${okCount} ok, ${failCount} failed`, okCount > 0 ? 'success' : 'error');
+  const skipCount = results.filter(r => r.skipped).length;
+  const failCount = results.length - okCount - skipCount;
+  toast(`Probed ${okCount} ok, ${failCount} failed${skipCount ? ', '+skipCount+' snoozed' : ''}`, okCount > 0 ? 'success' : 'error');
 
   const existingModal = document.querySelector('.probe-report-modal');
   if (existingModal) existingModal.remove();
@@ -437,7 +629,8 @@ async function probeModelNow() {
     const tierNum = r.priority || 1;
     const tc = tierColorForTier(tierNum);
     if (r.skipped) {
-      return '<tr style="opacity:0.5"><td style="color:'+tc.cssVar+';font-weight:600">'+tierNum+'</td><td><code>'+esc(r.provider)+'</code>:<code>'+esc(r.model)+'</code></td><td colspan="3" style="color:var(--text-dim)">disabled</td></tr>';
+      const reason = r.error === 'snoozed' ? 'snoozed' : 'disabled';
+      return '<tr style="opacity:0.5"><td style="color:'+tc.cssVar+';font-weight:600">'+tierNum+'</td><td><code>'+esc(r.provider)+'</code>:<code>'+esc(r.model)+'</code></td><td colspan="3" style="color:var(--text-dim)">'+reason+'</td></tr>';
     }
     if (!r.ok) {
       return '<tr><td style="color:'+tc.cssVar+';font-weight:600">'+tierNum+'</td><td><code>'+esc(r.provider)+'</code>:<code>'+esc(r.model)+'</code></td><td colspan="3" style="color:var(--danger);font-weight:600">ERROR</td></tr>';
@@ -516,9 +709,15 @@ function renderDetailTable(backends) {
 
   el.innerHTML = rows.map((b, i) => {
     const off = !b.enabled;
-    const rl = b.cooldown_remaining > 0;
-    const badge = off ? '<span class="badge badge-gray">off</span>'
-      : rl ? '<span class="badge badge-yellow">limited '+b.cooldown_remaining.toFixed(0)+'s</span>' : '';
+    const cooldown = b.cooldown_remaining || 0;
+    const isSnoozed = cooldown !== 0;
+    const isPermanent = cooldown < 0;
+    const snoozeBadge = isSnoozed 
+      ? (isPermanent 
+          ? '<span class="badge badge-gray" style="opacity:0.9">(snoozed)</span>'
+          : '<span class="badge badge-gray" style="opacity:0.9">(snoozed '+fmtSnoozeDurationRounded(cooldown)+')</span>')
+      : '';
+    const badge = off ? '<span class="badge badge-gray">off</span>' : snoozeBadge;
     const up = b.success_rate != null
       ? '<span class="badge '+(b.success_rate >= 95 ? 'badge-green' : b.success_rate >= 80 ? 'badge-yellow' : 'badge-red')+'">'+b.success_rate+'%</span>'
       : '—';
@@ -526,17 +725,18 @@ function renderDetailTable(backends) {
     const tierNum = b.priority || 1;
     const tc = tierColorForTier(tierNum);
     const shade = colorMap[b.provider + ':' + b.backend_model] || tc.base;
-    const rowBg = b.enabled ? tierBgForTier(tierNum) : 'var(--surface)';
+    const rowBg = (b.enabled && !isSnoozed) ? tierBgForTier(tierNum) : 'var(--surface)';
+    const rowOpacity = (off || isSnoozed) ? 'opacity:0.5;' : '';
 
-    return '<tr draggable="true" data-provider="'+esc(b.provider)+'" data-model="'+esc(b.backend_model)+'" data-priority="'+tierNum+'" style="background:'+rowBg+';'+(off?'opacity:0.55':'')+'" ondragstart="detailRowDragStart(event)" ondragover="detailRowDragOver(event)" ondrop="detailRowDrop(event)" ondragend="detailRowDragEnd(event)">'
+    return '<tr draggable="true" data-provider="'+esc(b.provider)+'" data-model="'+esc(b.backend_model)+'" data-priority="'+tierNum+'" style="background:'+rowBg+';'+rowOpacity+'" ondragstart="detailRowDragStart(event)" ondragover="detailRowDragOver(event)" ondrop="detailRowDrop(event)" ondragend="detailRowDragEnd(event)">'
       + '<td style="cursor:grab;color:var(--text-dim);padding-left:12px" title="Drag to reorder">⋮⋮</td>'
       + '<td style="font-weight:600;color:'+tc.cssVar+';border-left:3px solid '+shade+';padding-left:8px">'+tierNum+'</td>'
-      + '<td><span class="routing-dot" data-provider="'+esc(b.provider)+'" data-model="'+esc(b.backend_model)+'" title="Click to snooze"></span><code style="color:'+shade+'">'+esc(b.provider)+'</code>:<code>'+esc(b.backend_model)+'</code> '+badge+' <button class="icon-btn" style="padding:1px 5px;font-size:0.7rem" onclick="editProviderPricing(\''+esc(b.provider)+'\',\''+esc(b.backend_model)+'\')" title="Edit pricing">$</button></td>'
+      + '<td><span class="routing-dot '+(isSnoozed?'snoozed':'')+'" data-provider="'+esc(b.provider)+'" data-model="'+esc(b.backend_model)+'" title="'+(isSnoozed?'Click to manage snooze':'Click to snooze')+'"></span>'+providerAvatar(b.provider, 20, (b.provider_avatar || ''))+'<code style="color:'+shade+'">'+esc(b.provider)+'</code>:<code>'+esc(b.backend_model)+'</code> '+badge+' <button class="icon-btn" style="padding:1px 5px;font-size:0.7rem" onclick="editProviderPricing(\''+esc(b.provider)+'\',\''+esc(b.backend_model)+'\')" title="Edit pricing">$</button></td>'
       + '<td>'+(b.context_length ? fmtTokens(b.context_length) : '—')+'</td>'
       + '<td>'+(b.max_output_tokens ? fmtTokens(b.max_output_tokens) : '—')+'</td>'
-      + '<td>'+fmtPrice(b.input_price)+'</td>'
-      + '<td>'+fmtPrice(b.output_price)+'</td>'
-      + '<td style="font-size:0.78rem;color:var(--text-dim)">'+(b.cache_read_price != null || b.cache_write_price != null ? fmtPrice(b.cache_read_price)+' / '+fmtPrice(b.cache_write_price) : '— / —')+'</td>'
+      + '<td>'+fmtPricePrecise(b.input_price)+'</td>'
+      + '<td>'+fmtPricePrecise(b.output_price)+'</td>'
+      + '<td style="font-size:0.78rem;color:var(--text-dim)">'+(b.cache_read_price != null || b.cache_write_price != null ? fmtPricePrecise(b.cache_read_price)+' / '+fmtPricePrecise(b.cache_write_price) : '— / —')+'</td>'
       + '<td>'+(b.ttft_ms != null ? fmt(b.ttft_ms, 0)+'ms' : '—')+'</td>'
       + '<td style="font-weight:600;color:'+shade+'">'+(b.tps != null ? fmt(b.tps, 0)+' tps' : '—')+'</td>'
       + '<td>'+(b.latency_ms != null ? fmt(b.latency_ms/1000, 2)+'s' : '—')+'</td>'
@@ -557,10 +757,10 @@ function editProviderPricing(provider, backendModel) {
       <h3 style="margin:0 0 4px">Pricing — <code>${esc(provider)}:${esc(backendModel)}</code></h3>
       <p style="font-size:0.78rem;color:var(--text-dim);margin:0 0 18px">All prices per 1M tokens.</p>
       <div style="display:grid;gap:12px">
-        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Input ($/M)</label><input type="number" id="px-input" step="0.01" min="0" value="${pricing.input != null ? (pricing.input * 1e6).toFixed(2) : ''}" style="width:100%;padding:8px 10px"></div>
-        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Output ($/M)</label><input type="number" id="px-output" step="0.01" min="0" value="${pricing.output != null ? (pricing.output * 1e6).toFixed(2) : ''}" style="width:100%;padding:8px 10px"></div>
-        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Cache read ($/M)</label><input type="number" id="px-cache-read" step="0.01" min="0" value="${pricing.cache_read != null ? (pricing.cache_read * 1e6).toFixed(2) : ''}" placeholder="same as input" style="width:100%;padding:8px 10px"></div>
-        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Cache write ($/M)</label><input type="number" id="px-cache-write" step="0.01" min="0" value="${pricing.cache_write != null ? (pricing.cache_write * 1e6).toFixed(2) : ''}" placeholder="same as input" style="width:100%;padding:8px 10px"></div>
+        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Input ($/M)</label><input type="number" id="px-input" step="0.0001" min="0" value="${pricing.input != null ? (pricing.input * 1e6).toLocaleString(undefined,{maximumFractionDigits:6}) : ''}" style="width:100%;padding:8px 10px"></div>
+        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Output ($/M)</label><input type="number" id="px-output" step="0.0001" min="0" value="${pricing.output != null ? (pricing.output * 1e6).toLocaleString(undefined,{maximumFractionDigits:6}) : ''}" style="width:100%;padding:8px 10px"></div>
+        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Cache read ($/M)</label><input type="number" id="px-cache-read" step="0.0001" min="0" value="${pricing.cache_read != null ? (pricing.cache_read * 1e6).toLocaleString(undefined,{maximumFractionDigits:6}) : ''}" placeholder="same as input" style="width:100%;padding:8px 10px"></div>
+        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Cache write ($/M)</label><input type="number" id="px-cache-write" step="0.0001" min="0" value="${pricing.cache_write != null ? (pricing.cache_write * 1e6).toLocaleString(undefined,{maximumFractionDigits:6}) : ''}" placeholder="same as input" style="width:100%;padding:8px 10px"></div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
         <button class="secondary" onclick="this.closest('.command-palette').remove()">Cancel</button>
@@ -900,6 +1100,8 @@ async function removeBackendFromModel(provider, backendModel) {
   }
 }
 
+let _addBackendModels = [];
+
 function showAddBackendModal() {
   const modelId = tierEditorState.modelId;
   if (!modelId) { toast('No model selected', 'error'); return; }
@@ -908,16 +1110,21 @@ function showAddBackendModal() {
   modal.className = 'command-palette';
   modal.style.cssText = 'display:flex;align-items:center;justify-content:center;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000';
   modal.innerHTML = `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:420px;max-width:90vw">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:460px;max-width:90vw">
       <h3 style="margin:0 0 16px">Add Provider to Model</h3>
       <div style="display:grid;gap:12px">
         <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Provider *</label>
-          <select id="new-backend-provider" style="width:100%;padding:8px 10px">
+          <select id="new-backend-provider" style="width:100%;padding:8px 10px" onchange="loadProviderModelSuggestions()">
             <option value="">Select provider</option>
             ${providers.map(p => '<option value="'+esc(p.id)+'">'+esc(p.name || p.id)+'</option>').join('')}
           </select>
         </div>
-        <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Backend Model *</label><input type="text" id="new-backend-model" placeholder="Model name on provider" style="width:100%;padding:8px 10px"></div>
+        <div>
+          <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Backend Model *</label>
+          <input type="text" id="new-backend-model" placeholder="Pick from list or type a custom model ID" style="width:100%;padding:8px 10px" oninput="filterProviderModelSuggestions()">
+          <div id="new-backend-model-status" style="font-size:0.72rem;color:var(--text-dim);margin-top:4px;min-height:14px"></div>
+          <div id="new-backend-model-list" style="margin-top:4px;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;display:none"></div>
+        </div>
         <div><label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:4px">Priority (Tier)</label><input type="number" id="new-backend-priority" value="1" min="1" style="width:100%;padding:8px 10px"></div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
@@ -927,6 +1134,48 @@ function showAddBackendModal() {
     </div>`;
   document.body.appendChild(modal);
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+}
+
+async function loadProviderModelSuggestions() {
+  const providerId = document.getElementById('new-backend-provider').value;
+  const status = document.getElementById('new-backend-model-status');
+  const list = document.getElementById('new-backend-model-list');
+  const input = document.getElementById('new-backend-model');
+  _addBackendModels = [];
+  list.innerHTML = '';
+  list.style.display = 'none';
+  input.value = '';
+  if (!providerId) { status.textContent = ''; return; }
+  status.textContent = 'Loading catalog…';
+  try {
+    const { ok, data } = await fetchJSON('/admin/providers/' + encodeURIComponent(providerId) + '/models');
+    if (!ok) {
+      status.textContent = data.error || 'Failed to load models — type a custom ID';
+      return;
+    }
+    _addBackendModels = (data.models || []).map(m => typeof m === 'string' ? m : (m.id || '')).filter(Boolean);
+    status.textContent = _addBackendModels.length + ' models found · type to filter or enter a custom ID';
+    filterProviderModelSuggestions();
+  } catch (e) {
+    status.textContent = e.message + ' — type a custom ID';
+  }
+}
+
+function filterProviderModelSuggestions() {
+  const list = document.getElementById('new-backend-model-list');
+  const q = (document.getElementById('new-backend-model').value || '').toLowerCase().trim();
+  if (!_addBackendModels.length) { list.style.display = 'none'; return; }
+  const filtered = q ? _addBackendModels.filter(id => id.toLowerCase().includes(q)) : _addBackendModels;
+  if (!filtered.length) { list.style.display = 'none'; return; }
+  list.style.display = 'block';
+  list.innerHTML = filtered.slice(0, 100).map(id =>
+    `<div style="padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-family:var(--font-mono);font-size:0.82rem" onmousedown="pickAddBackendModel('${esc(id)}');return false">${esc(id)}</div>`
+  ).join('');
+}
+
+function pickAddBackendModel(id) {
+  document.getElementById('new-backend-model').value = id;
+  document.getElementById('new-backend-model-list').style.display = 'none';
 }
 
 async function addBackend(btn) {

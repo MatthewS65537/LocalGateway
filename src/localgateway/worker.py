@@ -58,6 +58,8 @@ def create_app(config_path: str = "config.json") -> FastAPI:
 
     @app.on_event("shutdown")
     async def shutdown():
+        from .ratelimit import ratelimit
+        ratelimit.save()
         prober.stop_prober()
         await app.state.http_client.aclose()
         logs.info("Gateway worker shutting down", provider="worker")

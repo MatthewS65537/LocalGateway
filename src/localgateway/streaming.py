@@ -13,6 +13,7 @@ from .provider import (
     StreamFailed,
 )
 from .router import select_backends, SelectedBackend, ProviderPrefs
+from .cache import fingerprint
 
 
 def _shift_usage_to_cached(body: bytes) -> bytes:
@@ -221,6 +222,7 @@ def _resolve_backends(
     max_tokens: int | None,
     input_tokens: int | None = None,
     prefs: ProviderPrefs | None = None,
+    cache_key: str | None = None,
 ) -> tuple[list[SelectedBackend], dict | None, int]:
     """Select backends for a request. Returns (backends, error_dict, status).
     error_dict is set when the request cannot be routed."""
@@ -234,7 +236,8 @@ def _resolve_backends(
 
     backends = list(
         select_backends(
-            config, logical_model, max_tokens=max_tokens, input_tokens=input_tokens, prefs=prefs
+            config, logical_model, max_tokens=max_tokens, input_tokens=input_tokens,
+            prefs=prefs, cache_key=cache_key,
         )
     )
     if backends:
@@ -286,9 +289,10 @@ async def handle_request(
     upstream_body = _strip_gateway_fields(request_body)
     max_tokens = _requested_max_tokens(request_body)
     input_tokens = _estimate_input_tokens(request_body)
+    cache_key = fingerprint(request_body)
 
     backends, err, status = _resolve_backends(
-        config, logical_model, max_tokens, input_tokens, prefs=prefs
+        config, logical_model, max_tokens, input_tokens, prefs=prefs, cache_key=cache_key
     )
     if err is not None:
         return (
@@ -314,6 +318,15 @@ async def handle_request(
                 result.provider_id,
                 result.backend_model,
                 latency_ms=result.latency_ms,
+            )
+            stats.record_cache_activity(
+                result.provider_id,
+                result.backend_model,
+                cache_key,
+                result.cached_tokens,
+                result.cache_write_tokens,
+                result.input_tokens,
+                getattr(selected.backend, "cache_supported", None),
             )
             body = _maybe_normalize_reasoning(config, selected.provider, result.body)
             pricing = config.pricing_for(result.provider_id, result.backend_model)
@@ -451,9 +464,10 @@ async def handle_request_stream(
     upstream_body = _strip_gateway_fields(request_body)
     max_tokens = _requested_max_tokens(request_body)
     input_tokens = _estimate_input_tokens(request_body)
+    cache_key = fingerprint(request_body)
 
     backends, err, status = _resolve_backends(
-        config, logical_model, max_tokens, input_tokens, prefs=prefs
+        config, logical_model, max_tokens, input_tokens, prefs=prefs, cache_key=cache_key
     )
     if err is not None:
         yield {"headers": {"Content-Type": "text/event-stream"}}
@@ -492,6 +506,15 @@ async def handle_request_stream(
                     ttft_ms=event.ttft_ms,
                 )
                 usage = event.usage
+                stats.record_cache_activity(
+                    selected.provider.id,
+                    selected.backend.model,
+                    cache_key,
+                    usage.cached_tokens,
+                    usage.cache_write_tokens,
+                    usage.input_tokens,
+                    getattr(selected.backend, "cache_supported", None),
+                )
                 cost = _compute_cost(
                     config,
                     selected.provider.id,
