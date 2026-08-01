@@ -58,5 +58,18 @@ async def settings(request: Request):
 
 
 # ---------- static ----------
+class NoCacheStaticFiles(StaticFiles):
+    """Static files that always revalidate with the origin.
+
+    Without a Cache-Control header browsers use heuristic caching and can
+    serve a stale app.css after an upgrade, which breaks the theme system
+    (e.g. the [data-theme="light"] override not applying). no-cache keeps
+    ETag-based revalidation (304 when unchanged) so assets are always fresh.
+    """
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
 if _web_dir.is_dir():
-    router.mount("/static", StaticFiles(directory=str(_web_dir)), name="static")
+    router.mount("/static", NoCacheStaticFiles(directory=str(_web_dir)), name="static")

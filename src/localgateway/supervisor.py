@@ -10,12 +10,11 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import logs
 from .config import GatewayConfig, load_config, save_config, set_config_path
 from .usage import get_usage_summary, set_db_path
-from .endpoints.web import router as web_router
+from .endpoints.web import NoCacheStaticFiles, router as web_router
 
 HOP_BY_HOP = {"host", "content-length", "connection", "keep-alive", "transfer-encoding", "upgrade"}
 RESP_STRIP = {"content-length", "content-encoding", "transfer-encoding", "connection"}
@@ -111,7 +110,7 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
 
     _web_dir = pathlib.Path(str(ir.files("localgateway.web")))
     if _web_dir.is_dir():
-        app.mount("/static", StaticFiles(directory=str(_web_dir)), name="static")
+        app.mount("/static", NoCacheStaticFiles(directory=str(_web_dir)), name="static")
 
     @app.get("/admin/server/status")
     async def server_status():
