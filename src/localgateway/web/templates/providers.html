@@ -3,8 +3,12 @@
 {% set active_page = "providers" %}
 {% block content %}
 <section class="page">
-  <h1 class="page-title">Providers</h1>
-  <p class="page-sub">Configure providers. Click a provider to expand details.</p>
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Providers</h1>
+      <p class="page-sub">Configure providers. Click a provider to expand details.</p>
+    </div>
+  </div>
 
   <div class="card">
     <div class="card-head">
@@ -17,11 +21,11 @@
       <div class="form-row"><label>Avatar</label><input type="text" id="new-prov-avatar" placeholder="e.g. OG, GPT, ☁️" maxlength="8" title="Custom text for the avatar tile"></div>
       <div class="form-row"><label>Base URL</label><input type="text" id="new-prov-url" placeholder="https://api.openai.com/v1"></div>
       <div class="form-row"><label>API Key</label><div class="api-key-wrap"><input type="password" id="new-prov-key" placeholder="sk-..."><button class="reveal-btn" onclick="toggleReveal('new-prov-key', this)">show</button></div></div>
-        <div class="form-row"><label>Timeout (s)</label><input type="number" id="new-prov-timeout" value="120"></div>
-        <div class="actions">
-          <button onclick="addProvider()">Add</button>
-          <button class="secondary" onclick="toggleAddProvider()">Cancel</button>
-        </div>
+      <div class="form-row"><label>Timeout (s)</label><input type="number" id="new-prov-timeout" value="120"></div>
+      <div class="actions">
+        <button onclick="addProvider()">Add</button>
+        <button class="secondary" onclick="toggleAddProvider()">Cancel</button>
+      </div>
     </div>
     <div id="providers-list"></div>
   </div>

@@ -7,7 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script>(function(){var t=localStorage.getItem('lg-theme');if(!t){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';}document.documentElement.setAttribute('data-theme',t);})();</script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -16,25 +16,26 @@
 
 <div class="top-bar">
   <a href="/" class="brand" title="LocalGateway">
-    <img class="logo" src="/static/icon.svg" alt="" width="28" height="28">
+    <img class="logo" src="/static/icon.svg" alt="" width="26" height="26">
     <span class="logo-text">Local<span class="tld">Gateway</span></span>
   </a>
   <div class="top-bar-left">
-    <input type="text" id="global-search" placeholder="Search models, providers, actions..." autocomplete="off">
+    <button type="button" id="global-search" class="search-trigger" onclick="openCommandPalette()" title="Search models, providers, actions">
+      <svg class="st-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+      <span class="st-text">Search models, providers, actions…</span>
+      <span class="st-kbd"><kbd>⌘</kbd><kbd>K</kbd></span>
+    </button>
   </div>
   <div class="top-bar-right">
-    <button id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+    <button id="theme-toggle" class="top-bar-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
       <span data-theme-toggle>☾</span>
-    </button>
-    <button id="cmd-k-btn" onclick="openCommandPalette()" title="Command palette (⌘K)">
-      <kbd>⌘</kbd><kbd>K</kbd>
     </button>
   </div>
 </div>
 
 <div class="command-palette hidden" id="command-palette">
-  <div class="palette-modal">
-    <input type="text" id="palette-search" placeholder="Type a command or search...">
+  <div class="palette-modal" role="dialog" aria-label="Command palette">
+    <input type="text" id="palette-search" placeholder="Type a model, provider, or command…" autocomplete="off">
     <div class="palette-results" id="palette-results"></div>
   </div>
 </div>

@@ -11,8 +11,7 @@ function setCatalogView(view, btn) {
   document.querySelectorAll('#catalog-view-toggle button').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   else {
-    const buttons = document.querySelectorAll('#catalog-view-toggle button');
-    buttons.forEach(b => {
+    document.querySelectorAll('#catalog-view-toggle button').forEach(b => {
       if ((view === 'cards' && b.textContent.trim() === 'List') ||
           (view === 'table' && b.textContent.trim() === 'Table')) b.classList.add('active');
     });
@@ -170,8 +169,21 @@ function _filteredModels() {
   return models;
 }
 
-function _statChip(label, val, accent) {
-  return '<div class="stat-chip"><div class="val'+(accent?' accent':'')+'">'+val+'</div><div class="lbl">'+label+'</div></div>';
+function _rcStats(m) {
+  const ctxStr = (m.context_min != null && m.context_max != null)
+    ? (m.context_min === m.context_max ? fmtTokens(m.context_min) : fmtTokens(m.context_min)+'–'+fmtTokens(m.context_max))
+    : (m.context_length ? fmtTokens(m.context_length) : '—');
+  const priceStr = m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—';
+  return [
+    '<div class="rc-stat rc-w-ctx"><div class="v">'+esc(ctxStr)+'</div><div class="l">Context</div></div>',
+    '<div class="rc-stat rc-w-price"><div class="v">'+esc(priceStr)+'</div><div class="l">In / Out</div></div>',
+    '<div class="rc-divider"></div>',
+    '<div class="rc-stat rc-w-num"><div class="v accent">'+(m.tps_p50 != null ? fmt(m.tps_p50, 0) : '—')+'</div><div class="l">TPS P50</div></div>',
+    '<div class="rc-stat rc-w-num"><div class="v">'+(m.success_rate != null ? m.success_rate+'%' : '—')+'</div><div class="l">Uptime</div></div>',
+    '<div class="rc-divider"></div>',
+    '<div class="rc-stat rc-w-num"><div class="v">'+fmtTokens(m.tokens)+'</div><div class="l">Tokens 7d</div></div>',
+    '<div class="rc-stat rc-w-num"><div class="v">'+fmtCost(m.cost)+'</div><div class="l">Spend 7d</div></div>',
+  ].join('');
 }
 
 function renderModelCatalog() {
@@ -195,8 +207,8 @@ function renderModelCatalog() {
       '</tr></thead><tbody>' +
       models.map(m => {
         const disabled = m.enabled === false;
-        return `<tr onclick="location.href='/models/${encodeURIComponent(m.id)}'">` +
-          `<td>${m.display_name ? esc(m.display_name)+' <code style="font-size:0.7rem;color:var(--text-dim)">'+esc(m.id)+'</code>' : '<code>'+esc(m.id)+'</code>'}` +
+        return `<tr data-id="${escAttr(m.id)}" onclick="location.href='/models/'+encodeURIComponent(this.dataset.id)">` +
+          `<td>${m.display_name ? esc(m.display_name)+' <code class="muted">'+esc(m.id)+'</code>' : '<code>'+esc(m.id)+'</code>'}` +
           (disabled ? ' <span class="badge badge-gray">off</span>' : '') + `</td>` +
           `<td>${m.modality ? '<span class="badge badge-purple">'+esc(m.modality)+'</span>' : '—'}</td>` +
           `<td>${m.context_length ? fmtTokens(m.context_length) : '—'}</td>` +
@@ -219,16 +231,13 @@ function renderModelCatalog() {
     const disabled = m.enabled === false;
     const modalityBadge = m.modality ? `<span class="badge badge-purple">${esc(m.modality)}</span>` : '';
     const tagsHtml = (m.tags || []).slice(0, 3).map(t => `<span class="badge badge-gray">${esc(t)}</span>`).join('');
-    const primaryProvider = (m.backends || [])[0];
     const avatarHtml = modelAvatar(m.id, m.display_name, 30, m.avatar);
-    const ctxStr = (m.context_min != null && m.context_max != null) ? (m.context_min === m.context_max ? fmtTokens(m.context_min) : fmtTokens(m.context_min)+'-'+fmtTokens(m.context_max)) : (m.context_length ? fmtTokens(m.context_length) : '—');
-    const priceStr = m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—';
 
     if (compareMode) {
       const selected = compareSelection.has(m.id);
       const canSelect = selected || compareSelection.size < 3;
-      return '<div class="row-card" style="opacity:'+(canSelect?'1':'0.4')+'" onclick="toggleCompareSelection(\''+esc(m.id)+'\')">'
-        + '<input type="checkbox" '+(selected?'checked':'')+(!canSelect?' disabled':'')+' onclick="toggleCompareSelection(\''+esc(m.id)+'\', event)" style="width:18px;height:18px;flex-shrink:0">'
+      return '<div class="row-card'+(canSelect ? '' : ' disabled')+'" data-id="'+escAttr(m.id)+'" onclick="toggleCompareSelection(this.dataset.id)">'
+        + '<input type="checkbox" class="rc-check" '+(selected?'checked':'')+(!canSelect?' disabled':'')+' data-id="'+escAttr(m.id)+'" onclick="toggleCompareSelection(this.dataset.id, event)">'
         + '<div class="rc-left">'
         +   avatarHtml
         +   '<div>'
@@ -237,57 +246,35 @@ function renderModelCatalog() {
         +   '</div>'
         + '</div>'
         + '<div class="rc-right">'
-        +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+esc(ctxStr)+'</div><div class="l">Context</div></div>'
-        +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+esc(priceStr)+'</div><div class="l">In / Out</div></div>'
+        +   '<div class="rc-stat rc-w-ctx"><div class="v">'+esc(m.context_length ? fmtTokens(m.context_length) : '—')+'</div><div class="l">Context</div></div>'
+        +   '<div class="rc-stat rc-w-price"><div class="v">'+(m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—')+'</div><div class="l">In / Out</div></div>'
         + '</div></div>';
     }
 
-    return '<div class="row-card" onclick="location.href=\'/models/'+encodeURIComponent(m.id)+'\'">'
+    return '<div class="row-card'+(disabled ? ' is-disabled' : '')+'" data-id="'+escAttr(m.id)+'" onclick="location.href=\'/models/\'+encodeURIComponent(this.dataset.id)">'
       + '<div class="rc-left">'
       +   avatarHtml
       +   '<div>'
       +     '<div class="rc-title">'
       +       '<span class="rc-name">'+(m.display_name ? esc(m.display_name) : esc(m.id))+'</span>'
       +       '<span class="rc-slug">'+esc(m.id)+'</span>'
-      +       '<button class="copy-btn" onclick="event.stopPropagation();copyId(\''+esc(m.id)+'\',this)" title="Copy model ID">⧉</button>'
+      +       '<button class="copy-btn" data-id="'+escAttr(m.id)+'" onclick="event.stopPropagation();copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>'
       +       modalityBadge + tagsHtml
       +       (disabled ? '<span class="badge badge-gray">disabled</span>' : '<span class="badge badge-blue">'+(m.backend_count||0)+' backend'+((m.backend_count||0)===1?'':'s')+'</span>')
       +     '</div>'
       +     '<div class="rc-desc">'+esc(m.description || 'No description')+'</div>'
       +   '</div>'
       + '</div>'
-      + '<div class="rc-right">'
-      +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+esc(ctxStr)+'</div><div class="l">Context</div></div>'
-      +   '<div class="rc-stat al-r pl9 pr16"><div class="v">'+esc(priceStr)+'</div><div class="l">In / Out</div></div>'
-      +   '<div class="rc-divider"></div>'
-      +   '<div class="rc-stat al-l pl16 pr9"><div class="v accent">'+(m.tps_p50 != null ? fmt(m.tps_p50, 0) : '—')+'</div><div class="l">TPS P50</div></div>'
-      +   '<div class="rc-stat al-r pl9 pr16"><div class="v">'+(m.success_rate != null ? m.success_rate+'%' : '—')+'</div><div class="l">Uptime</div></div>'
-      +   '<div class="rc-divider"></div>'
-      +   '<div class="rc-stat al-l pl16 pr9"><div class="v">'+fmtTokens(m.tokens)+'</div><div class="l">Tokens 7d</div></div>'
-      +   '<div class="rc-stat al-r pl9 pr9"><div class="v">'+fmtCost(m.cost)+'</div><div class="l">Spend 7d</div></div>'
-      + '</div></div>';
+      + '<div class="rc-right">'+_rcStats(m)+'</div></div>';
   }).join('');
 
   if (compareMode && compareSelection.size >= 2) {
-    cardsEl.innerHTML += '<div style="position:fixed;bottom:20px;right:20px;z-index:10"><button class="primary" onclick="showCompare()">Compare ' + compareSelection.size + ' models</button></div>';
+    const fab = document.createElement('div');
+    fab.className = 'fab';
+    fab.innerHTML = '<button class="primary" onclick="showCompare()">Compare ' + compareSelection.size + ' models</button>';
+    cardsEl.appendChild(fab);
   }
-  alignStatColumns();
 }
-
-function alignStatColumns() {
-  const rows = [...document.querySelectorAll('.row-card')].filter(r => r.querySelectorAll('.rc-stat').length);
-  if (!rows.length) return;
-  const groups = {};
-  rows.forEach(r => { const n = r.querySelectorAll('.rc-stat').length; (groups[n] = groups[n] || []).push(r); });
-  Object.values(groups).forEach(grp => {
-    if (grp.length < 2) return;
-    const n = grp[0].querySelectorAll('.rc-stat').length;
-    const widths = new Array(n).fill(0);
-    grp.forEach(r => { const s = r.querySelectorAll('.rc-stat'); for (let i = 0; i < n; i++) widths[i] = Math.max(widths[i], s[i].offsetWidth); });
-    grp.forEach(r => { const s = r.querySelectorAll('.rc-stat'); for (let i = 0; i < n; i++) s[i].style.width = widths[i] + 'px'; });
-  });
-}
-window.addEventListener('load', alignStatColumns);
 
 function showAddModelModal() {
   const providers = (currentConfig && currentConfig.providers) || [];
@@ -312,8 +299,8 @@ function showAddModelModal() {
         <div class="field"><label class="field-label">Search</label>
           <input type="text" id="discover-search" placeholder="Filter upstream models…" oninput="filterDiscoverList()">
         </div>
-        <div id="discover-status" style="font-size:0.78rem;color:var(--text-dim);margin-bottom:8px"></div>
-        <div id="discover-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px"></div>
+        <div id="discover-status" class="filter-hint" style="margin-bottom:8px"></div>
+        <div id="discover-list" class="discover-list"></div>
         <input type="hidden" id="picked-backend-model" value="">
         <input type="hidden" id="picked-provider" value="">
         <div class="field" style="margin-top:12px"><label class="field-label">Gateway Model ID *</label><input type="text" id="new-model-id-cat" placeholder="Logical id for LocalGateway"></div>
@@ -373,19 +360,19 @@ function filterDiscoverList() {
   }
   list.innerHTML = filtered.slice(0, 100).map(m => {
     const id = typeof m === 'string' ? m : (m.id || '');
-    return `<div style="padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;font-family:var(--font-mono);font-size:0.82rem" onclick="pickDiscovered('${esc(id)}')">${esc(id)}</div>`;
+    return `<div class="discover-row" data-id="${escAttr(id)}" onclick="pickDiscovered(this.dataset.id, this)"><code>${esc(id)}</code></div>`;
   }).join('');
 }
 
-function pickDiscovered(backendModel) {
+function pickDiscovered(backendModel, el) {
   const providerId = document.getElementById('discover-provider').value;
   document.getElementById('picked-backend-model').value = backendModel;
   document.getElementById('picked-provider').value = providerId;
   const slug = backendModel.replace(/[/:]/g, '-');
   document.getElementById('new-model-id-cat').value = slug;
   document.getElementById('new-model-name-cat').value = backendModel;
-  document.querySelectorAll('#discover-list > div').forEach(el => {
-    el.style.background = el.textContent === backendModel ? 'var(--surface-2)' : '';
+  document.querySelectorAll('#discover-list > div').forEach(row => {
+    row.classList.toggle('picked', row === el);
   });
 }
 

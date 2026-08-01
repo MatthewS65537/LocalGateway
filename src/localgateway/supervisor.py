@@ -204,6 +204,11 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
             })
         return JSONResponse({"hours": hours, "models": models})
 
+    @app.get("/admin/models/compare")
+    async def models_compare_supervisor(ids: str = ""):
+        from .endpoints.admin import models_compare
+        return await models_compare(ids=ids)
+
     @app.get("/admin/models/{model_id}")
     async def get_model(model_id: str):
         cfg = load_config()

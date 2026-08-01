@@ -45,14 +45,24 @@
       ['Success Rate', m => m.success_rate != null ? m.success_rate + '%' : '—'],
       ['Tokens (7d)', m => fmtTokens(m.tokens || 0)],
       ['TPS P50', m => m.tps_p50 != null ? Number(m.tps_p50).toFixed(1) : '—'],
-      ['Input $/M', m => m.input_price != null ? '$' + (m.input_price * 1e6).toFixed(2) : '—'],
-      ['Output $/M', m => m.output_price != null ? '$' + (m.output_price * 1e6).toFixed(2) : '—'],
+      ['Input $/M', m => fmtPrice(m.input_price)],
+      ['Output $/M', m => fmtPrice(m.output_price)],
       ['Enabled', m => m.enabled ? 'Yes' : 'No'],
     ];
 
-    let html = '<table class="compare-table"><thead><tr><th class="compare-label"></th>';
+    let html = '<div class="table-wrap"><table class="compare-table"><thead><tr><th class="compare-label"></th>';
     models.forEach(m => {
-      html += `<th>${esc(m.display_name || m.id)}</th>`;
+      const avatar = modelAvatar(m.id, m.display_name, 24, m.avatar);
+      const enabledBadge = m.enabled === false ? ' <span class="badge badge-gray">off</span>' : '';
+      html += `<th class="compare-th">
+        <div class="hstack" style="justify-content:flex-start">
+          ${avatar}
+          <span>${esc(m.display_name || m.id)}</span>
+          <button class="copy-btn" data-id="${escAttr(m.id)}" onclick="copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>
+          ${enabledBadge}
+        </div>
+        <div class="filter-hint" style="margin-top:2px"><code>${esc(m.id)}</code></div>
+      </th>`;
     });
     html += '</tr></thead><tbody>';
     rows.forEach(([label, fn]) => {
@@ -60,7 +70,7 @@
       models.forEach(m => { html += `<td>${fn(m)}</td>`; });
       html += '</tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     wrap.innerHTML = html;
     wrap.classList.remove('hidden');
   } catch (e) {

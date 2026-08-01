@@ -72,24 +72,24 @@ function updateDecayViz() {
   const mode = document.getElementById('settings-routing-mode').value;
   const decay = parseFloat(document.getElementById('settings-routing-decay').value) || 0.4;
   document.getElementById('decay-value').textContent = decay.toFixed(2);
-  const section = document.getElementById('decay-section');
-  section.style.display = mode === 'explore' ? 'block' : 'none';
+  document.getElementById('decay-section').classList.toggle('hidden', mode !== 'explore');
 
   const viz = document.getElementById('decay-viz');
   viz.innerHTML = '';
+  const colors = ['var(--accent)', 'var(--green)', 'var(--yellow)', 'var(--red)', 'var(--text-dim)'];
   for (let tiers = 2; tiers <= 5; tiers++) {
     const weights = [];
     for (let i = 0; i < tiers; i++) weights.push(Math.pow(decay, i));
     const sum = weights.reduce((a, b) => a + b, 0);
     const norm = weights.map(w => (w / sum * 100));
 
-    const bar = document.createElement('div');
-    bar.style.cssText = 'display:grid;grid-template-columns:70px 1fr;gap:10px;align-items:center';
-    bar.innerHTML = `<span style="font-size:0.72rem;color:var(--text-dim)">${tiers} tiers</span>
-      <div style="display:flex;gap:2px;height:28px;border-radius:6px;overflow:hidden;background:var(--surface-3)">
-        ${norm.map((p, i) => `<div style="width:${p}%;background:${['var(--accent)','var(--green)','var(--yellow)','var(--red)','var(--text-dim)'][i]};display:flex;align-items:center;justify-content:center;font-size:0.68rem;font-weight:600;color:rgba(0,0,0,0.7);overflow:hidden" title="Tier ${i+1}: ${p.toFixed(1)}%">${p >= 8 ? p.toFixed(0)+'%' : ''}</div>`).join('')}
+    const row = document.createElement('div');
+    row.className = 'decay-bar-row';
+    row.innerHTML = `<span class="filter-hint">${tiers} tiers</span>
+      <div class="decay-bar">
+        ${norm.map((p, i) => `<div class="decay-seg" style="width:${p}%;background:${colors[i]};color:rgba(0,0,0,0.7)" title="Tier ${i+1}: ${p.toFixed(1)}%">${p >= 8 ? p.toFixed(0)+'%' : ''}</div>`).join('')}
       </div>`;
-    viz.appendChild(bar);
+    viz.appendChild(row);
   }
 }
 
@@ -122,8 +122,7 @@ async function loadProbeSettings() {
 
 function toggleProbeSettings() {
   const enabled = document.getElementById('settings-probe-enabled').checked;
-  document.getElementById('probe-options').style.opacity = enabled ? '1' : '0.5';
-  document.getElementById('probe-options').style.pointerEvents = enabled ? 'auto' : 'none';
+  document.getElementById('probe-options').classList.toggle('dimmed', !enabled);
 }
 
 async function saveProbeSettings() {
@@ -155,12 +154,8 @@ async function saveDisplaySettings() {
     const { data } = await fetchJSON('/admin/config');
     data.server = data.server || {};
     data.server.chart_enabled = document.getElementById('settings-chart-enabled').checked;
-    const r = await fetch('/admin/config', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data),
-    });
-    if (r.ok) toast('Display settings saved', 'success');
+    const { ok } = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
+    if (ok) toast('Display settings saved', 'success');
     else toast('Failed to save display settings', 'error');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }

@@ -46,7 +46,6 @@ function setupLogTimer() {
   if (logTimer) { clearInterval(logTimer); logTimer = null; }
   const on = document.getElementById('log-autorefresh').checked;
   if (on) logTimer = setInterval(() => {
-    // Only auto-refresh on the logs page (element presence signals it)
     if (document.getElementById('log-list')) loadLogs();
   }, 3000);
 }

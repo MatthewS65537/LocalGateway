@@ -3,24 +3,30 @@
 {% set active_page = "dashboard" %}
 {% block content %}
 <section class="page">
-  <h1 class="page-title">Dashboard</h1>
-  <p class="page-sub">Live overview of your gateway.</p>
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Dashboard</h1>
+      <p class="page-sub">Live overview of your gateway.</p>
+    </div>
+  </div>
 
   <div class="card">
     <div class="card-head">
       <h2>Gateway Status</h2>
-      <div style="display:flex;gap:8px">
+      <div class="hstack">
         <button class="success" id="dash-start" onclick="startServer()">Start</button>
         <button class="danger" id="dash-stop" onclick="stopServer()">Stop</button>
         <button class="secondary" onclick="restartServer()">Restart</button>
-        <button class="danger" style="margin-left:8px" onclick="shutdownGateway()" title="Stop gateway worker and close dashboard">Shutdown</button>
+        <button class="danger" onclick="shutdownGateway()" title="Stop gateway worker and close dashboard">Shutdown</button>
       </div>
     </div>
-    <div id="dash-status" style="display:flex;gap:28px;flex-wrap:wrap;font-size:0.86rem;align-items:center">
-      <span><span style="color:var(--text-dim)">State:</span> <span id="dash-state">—</span></span>
-      <span><span style="color:var(--text-dim)">PID:</span> <span class="mono" id="dash-pid">—</span></span>
-      <span><span style="color:var(--text-dim)">Uptime:</span> <span class="mono" id="dash-uptime">—</span></span>
-      <span><span style="color:var(--text-dim)">Port:</span> <input type="number" id="dash-port-input" value="8080" min="1" max="65535" style="width:90px;padding:4px 8px;font-size:0.85rem" onchange="savePortFromDash()"></span>
+    <div class="hstack status-row" id="dash-status">
+      <span><span class="muted">State:</span> <span id="dash-state">—</span></span>
+      <span><span class="muted">PID:</span> <span class="mono" id="dash-pid">—</span></span>
+      <span><span class="muted">Uptime:</span> <span class="mono" id="dash-uptime">—</span></span>
+      <span><span class="muted">Port:</span>
+        <input type="number" id="dash-port-input" class="port-input" value="3456" min="1" max="65535" onchange="savePortFromDash()">
+      </span>
     </div>
   </div>
 

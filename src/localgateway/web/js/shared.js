@@ -1,5 +1,5 @@
 // shared.js — common helpers used across all pages
-// Loaded in base.html before page-specific JS
+// Loaded in base.html before page-specific JS.
 
 // ---------- global state (shared) ----------
 let currentConfig = null;
@@ -19,7 +19,19 @@ async function fetchJSON(url, opts) {
 }
 function fmt(n, d=2) { return (n || 0).toLocaleString(undefined, {maximumFractionDigits: d}); }
 function fmtCost(n) { return '$' + fmt(n, 4); }
+function fmtPrice(p) {
+  if (p == null) return '—';
+  return '$' + (p * 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+function fmtPricePrecise(p) {
+  if (p == null) return '—';
+  return '$' + (p * 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+// Escape for HTML body/text content (& < > ") and double-quoted attributes.
 function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// Escape for double-quoted attribute values, additionally handling single quotes
+// so values survive when re-read via dataset (e.g. data-id="...").
+function escAttr(s) { return esc(s).replace(/'/g,'&#39;'); }
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
   return d.toTimeString().slice(0, 8);
@@ -39,10 +51,6 @@ function fmtTokens(n) {
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
   return String(n);
 }
-function fmtPrice(p) {
-  if (p == null) return '—';
-  return '$' + (p * 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
 
 // ---------- copy-to-clipboard ----------
 function copyId(text, btn) {
@@ -54,7 +62,7 @@ function copyId(text, btn) {
   }
 }
 
-// ---------- provider avatar ----------
+// ---------- provider / model avatar ----------
 const _AVATAR_PALETTE = [
   ['#10a37f', '#1a7f64'], ['#d97757', '#b85a3d'], ['#7c5cf1', '#5b3fd6'],
   ['#6366f1', '#4f46e5'], ['#0078d4', '#005a9e'], ['#f59e0b', '#d97706'],
@@ -65,8 +73,6 @@ function _hashStr(s) {
   for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
   return Math.abs(h);
 }
-
-// Smart font sizing: shrink font as text gets longer so it always fits the tile.
 function _avatarFontSize(text, size) {
   const len = (text || '').length;
   const base = size >= 40 ? 1.1 : (size <= 20 ? 0.62 : 0.74);
@@ -76,27 +82,22 @@ function _avatarFontSize(text, size) {
   if (len <= 5) return base * 0.46;
   return base * 0.36;
 }
-
-// Resolve the label to render: custom text wins, else first letter of the label.
 function _avatarLabel(customText, fallback) {
   if (customText && customText.trim()) return customText.trim();
   return (fallback || '?').charAt(0).toUpperCase();
 }
-
 function _avatarMarkup(label, colors, size) {
   const [c1, c2] = colors;
   const fs = _avatarFontSize(label, size);
   const pad = label.length > 2 ? 'padding:0 4px;' : '';
   return '<span class="avatar" style="width:'+size+'px;height:'+size+'px;font-size:'+fs+'rem;'+pad+'background:linear-gradient(135deg,'+c1+','+c2+')">'+esc(label)+'</span>';
 }
-
 function providerAvatar(providerId, size, avatarText) {
   const sz = size || 28;
   const label = _avatarLabel(avatarText, providerId);
   const [c1, c2] = _AVATAR_PALETTE[_hashStr(providerId || '') % _AVATAR_PALETTE.length];
   return _avatarMarkup(label, [c1, c2], sz);
 }
-
 function modelAvatar(modelId, displayName, size, avatarText) {
   const sz = size || 28;
   const label = _avatarLabel(avatarText, displayName || modelId);
@@ -174,7 +175,7 @@ function showConfirm(title, message) {
   });
 }
 
-// ---------- server status / control (server pill) ----------
+// ---------- server status / control ----------
 async function loadServerStatus() {
   try {
     const { data } = await fetchJSON('/admin/server/status');
@@ -231,7 +232,10 @@ async function shutdownGateway() {
   const confirmed = await confirm2('Stop the gateway worker and close this dashboard?');
   if (!confirmed) return;
   try { await fetch('/admin/server/stop', { method: 'POST' }); } catch(e) {}
-  document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;background:var(--bg)"><h1 style="font-family:var(--font-display);font-size:1.5rem;color:var(--text-bright)">Gateway shut down</h1><p style="color:var(--text-dim);font-size:0.9rem">You can close this tab.</p></div>';
+  document.body.innerHTML =
+    '<div class="shutdown-screen">' +
+    '<h1>Gateway shut down</h1>' +
+    '<p>You can close this tab.</p></div>';
   setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
 }
 
@@ -254,18 +258,40 @@ function setTheme(theme) {
 function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
 window.addEventListener('DOMContentLoaded', () => setTheme(currentTheme()));
 
-// ---------- command palette ----------
+// ---------- command palette (fuzzy search: actions + models + providers) ----------
 const COMMANDS = [
-  { label: 'Go to Dashboard', hint: 'Navigate to dashboard', action: () => location.href = '/' },
-  { label: 'Go to Models', hint: 'Navigate to models catalog', action: () => location.href = '/models' },
-  { label: 'Go to Providers & Models', hint: 'Navigate to config editor', action: () => location.href = '/providers' },
-  { label: 'Go to Usage', hint: 'View usage analytics', action: () => location.href = '/usage' },
-  { label: 'Go to Logs', hint: 'View system logs', action: () => location.href = '/logs' },
-  { label: 'Go to Settings', hint: 'View settings', action: () => location.href = '/settings' },
+  { label: 'Dashboard', hint: 'Navigate to dashboard', action: () => location.href = '/' },
+  { label: 'Models', hint: 'Navigate to model catalog', action: () => location.href = '/models' },
+  { label: 'Providers', hint: 'Navigate to providers', action: () => location.href = '/providers' },
+  { label: 'Usage', hint: 'View usage analytics', action: () => location.href = '/usage' },
+  { label: 'Logs', hint: 'View system logs', action: () => location.href = '/logs' },
+  { label: 'Settings', hint: 'View settings', action: () => location.href = '/settings' },
   { label: 'Toggle Theme', hint: 'Switch dark/light mode', action: () => toggleTheme() },
   { label: 'Reload Config', hint: 'Reload gateway configuration', action: () => fetch('/admin/config/reload', { method: 'POST' }).then(() => toast('Config reloaded', 'success')) },
   { label: 'Test Gateway Health', hint: 'Check gateway health', action: () => fetch('/admin/health').then(r => r.json()).then(d => toast('Health: ' + (d.providers ? 'OK' : 'Error'), 'success')) },
 ];
+
+let paletteIndex = null;
+async function ensurePaletteIndex() {
+  if (paletteIndex) return paletteIndex;
+  try {
+    const { data } = await fetchJSON('/admin/config');
+    const models = (data.models || []).map(m => ({
+      label: m.display_name || m.id,
+      hint: m.id,
+      action: () => location.href = '/models/' + encodeURIComponent(m.id),
+    }));
+    const providers = (data.providers || []).map(p => ({
+      label: p.name || p.id,
+      hint: p.id,
+      action: () => location.href = '/providers',
+    }));
+    paletteIndex = { models, providers };
+  } catch(_) {
+    paletteIndex = { models: [], providers: [] };
+  }
+  return paletteIndex;
+}
 
 function openCommandPalette() {
   document.getElementById('command-palette').classList.remove('hidden');
@@ -273,31 +299,71 @@ function openCommandPalette() {
   input.value = '';
   input.focus();
   renderPaletteResults('');
+  ensurePaletteIndex().then(() => {
+    const current = document.getElementById('palette-search').value;
+    renderPaletteResults(current);
+  });
 }
-
 function closeCommandPalette() {
   document.getElementById('command-palette').classList.add('hidden');
+}
+
+function _paletteMatches(q, item) {
+  if (!q) return true;
+  return item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q);
 }
 
 function renderPaletteResults(query) {
   const results = document.getElementById('palette-results');
   const q = query.toLowerCase();
-  const filtered = COMMANDS.filter(c => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
-  if (!filtered.length) {
-    results.innerHTML = '<div class="palette-item"><span class="label">No commands found</span></div>';
+
+  const actionMatches = COMMANDS.map((c, i) => ({ ...c, _i: i })).filter(c => _paletteMatches(q, c));
+  const modelMatches = paletteIndex ? paletteIndex.models.filter(m => _paletteMatches(q, m)) : [];
+  const providerMatches = paletteIndex ? paletteIndex.providers.filter(p => _paletteMatches(q, p)) : [];
+
+  if (!actionMatches.length && !modelMatches.length && !providerMatches.length) {
+    results.innerHTML = '<div class="palette-item"><span class="label">No results</span></div>';
     return;
   }
-  results.innerHTML = filtered.map((c, i) =>
-    `<div class="palette-item ${i === 0 ? 'selected' : ''}" onclick="executeCommand(${COMMANDS.indexOf(c)})">
-      <span class="label">${esc(c.label)}</span>
-      <span class="hint">${esc(c.hint)}</span>
-    </div>`
-  ).join('');
+
+  let html = '';
+  const selClass = (active) => active ? ' selected' : '';
+  const track = (() => { let n = 0; return () => n++; })();
+
+  if (actionMatches.length) {
+    html += '<div class="palette-section">Actions</div>';
+    actionMatches.forEach(c => {
+      html += `<div class="palette-item${selClass(track() === 0)}" data-action="${c._i}">
+        <span class="label">${esc(c.label)}</span>
+        <span class="hint">${esc(c.hint)}</span></div>`;
+    });
+  }
+  if (modelMatches.length) {
+    html += '<div class="palette-section">Models</div>';
+    modelMatches.forEach(m => {
+      html += `<div class="palette-item${selClass(track() === 0)}" data-model="${escAttr(m.hint)}">
+        <span class="label">${esc(m.label)}</span>
+        <span class="hint">${esc(m.hint)}</span></div>`;
+    });
+  }
+  if (providerMatches.length) {
+    html += '<div class="palette-section">Providers</div>';
+    providerMatches.forEach(p => {
+      html += `<div class="palette-item${selClass(track() === 0)}" data-provider="${escAttr(p.hint)}">
+        <span class="label">${esc(p.label)}</span>
+        <span class="hint">${esc(p.hint)}</span></div>`;
+    });
+  }
+  results.innerHTML = html;
 }
 
-function executeCommand(index) {
-  COMMANDS[index].action();
-  closeCommandPalette();
+function executePaletteItem(el) {
+  const act = el.dataset.action;
+  if (act != null) { COMMANDS[Number(act)].action(); closeCommandPalette(); return; }
+  const modelId = el.dataset.model;
+  if (modelId != null) { location.href = '/models/' + encodeURIComponent(modelId); closeCommandPalette(); return; }
+  const providerId = el.dataset.provider;
+  if (providerId != null) { location.href = '/providers'; closeCommandPalette(); }
 }
 
 document.addEventListener('keydown', (e) => {
@@ -320,21 +386,26 @@ document.addEventListener('DOMContentLoaded', () => {
     paletteInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         const selected = document.querySelector('.palette-item.selected');
-        if (selected) selected.click();
+        if (selected) executePaletteItem(selected);
+      }
+    });
+    paletteInput.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = document.querySelectorAll('.palette-item');
+        if (!items.length) return;
+        let idx = [...items].findIndex(i => i.classList.contains('selected'));
+        if (idx === -1) idx = 0;
+        else idx = e.key === 'ArrowDown' ? Math.min(items.length - 1, idx + 1) : Math.max(0, idx - 1);
+        items.forEach(i => i.classList.remove('selected'));
+        items[idx].classList.add('selected');
       }
     });
   }
-  const globalSearch = document.getElementById('global-search');
-  if (globalSearch) {
-    globalSearch.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const q = globalSearch.value.trim();
-        if (q) {
-          location.href = '/models?q=' + encodeURIComponent(q);
-        }
-      }
-    });
-  }
+  document.getElementById('palette-results').addEventListener('click', (e) => {
+    const item = e.target.closest('.palette-item');
+    if (item) executePaletteItem(item);
+  });
 });
 
 // ---------- sidebar toggle ----------

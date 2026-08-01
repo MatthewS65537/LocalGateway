@@ -3,22 +3,26 @@
 {% set active_page = "logs" %}
 {% block content %}
 <section class="page">
-  <h1 class="page-title">Logs</h1>
-  <p class="page-sub">Request activity, fallbacks, and server control.</p>
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Logs</h1>
+      <p class="page-sub">Request activity, fallbacks, and server control.</p>
+    </div>
+  </div>
 
   <div class="card">
     <div class="card-head">
       <h2>Server Control</h2>
-      <div style="display:flex;gap:8px">
+      <div class="hstack">
         <button class="success" id="log-start" onclick="startServer()">Start</button>
         <button class="danger" id="log-stop" onclick="stopServer()">Stop</button>
         <button class="secondary" onclick="restartServer()">Restart</button>
       </div>
     </div>
-    <div style="display:flex;gap:28px;flex-wrap:wrap;font-size:0.86rem">
-      <span><span style="color:var(--text-dim)">State:</span> <span id="log-state">—</span></span>
-      <span><span style="color:var(--text-dim)">PID:</span> <span class="mono" id="log-pid">—</span></span>
-      <span><span style="color:var(--text-dim)">Uptime:</span> <span class="mono" id="log-uptime">—</span></span>
+    <div class="hstack status-row">
+      <span><span class="muted">State:</span> <span id="log-state">—</span></span>
+      <span><span class="muted">PID:</span> <span class="mono" id="log-pid">—</span></span>
+      <span><span class="muted">Uptime:</span> <span class="mono" id="log-uptime">—</span></span>
     </div>
   </div>
 
@@ -26,8 +30,8 @@
     <div class="card-head">
       <h2>Activity Log</h2>
       <div class="log-controls">
-        <label style="font-size:0.8rem;color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="log-autorefresh" checked style="width:auto" onchange="toggleLogAutoRefresh()"> Auto-refresh
+        <label class="field-label auto-refresh-label">
+          <input type="checkbox" id="log-autorefresh" checked onchange="toggleLogAutoRefresh()"> Auto-refresh
         </label>
         <button class="secondary" onclick="loadLogs()">Refresh</button>
         <button class="danger" onclick="clearLogs()">Clear</button>

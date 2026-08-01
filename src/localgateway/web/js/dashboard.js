@@ -1,6 +1,4 @@
 // dashboard.js — dashboard page logic
-let usageRangeHours = 24;
-
 async function loadDashboard() {
   loadServerStatus();
   loadDashUsage();
@@ -41,7 +39,7 @@ async function loadHealth() {
       const rate = st.success_rate != null ? st.success_rate+'%' : '—';
       const errTip = st.last_error ? ' title="'+esc(st.last_error)+'"' : '';
       return '<div class="provider-row"><div class="provider-info">'
-        + '<span class="provider-name"><code>'+esc(b.model)+'</code> <span style="color:var(--text-dim)">via</span> '+esc(b.provider_name)+':'+esc(b.backend_model)+'</span>'
+        + '<span class="provider-name"><code>'+esc(b.model)+'</code> <span class="muted">via</span> '+esc(b.provider_name)+':'+esc(b.backend_model)+'</span>'
         + '<div class="provider-url">tier #'+b.priority+' · lat '+lat+' · ttft '+ttft+' · ok '+rate+'</div>'
         + '</div><span'+errTip+'>'+badge+'</span></div>';
     }).join('');

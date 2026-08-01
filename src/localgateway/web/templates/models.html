@@ -3,12 +3,12 @@
 {% set active_page = "models" %}
 {% block content %}
 <section class="page">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+  <div class="page-head">
     <div>
       <h1 class="page-title">Models</h1>
-      <p class="page-sub" style="margin-bottom:0">Your gateway model catalog — throughput, latency, and uptime per provider.</p>
+      <p class="page-sub">Your gateway model catalog — throughput, latency, and uptime per provider.</p>
     </div>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div class="hstack">
       <button class="secondary" onclick="toggleCompareMode()" id="compare-btn">Compare</button>
       <button class="primary" onclick="showAddModelModal()">+ Add Model</button>
     </div>
@@ -17,7 +17,7 @@
   <div class="modality-tabs" id="modality-tabs"></div>
 
   <div class="toolbar">
-    <input type="text" id="models-search" placeholder="Search models…" oninput="renderModelCatalog()" style="max-width:280px">
+    <input type="search" id="models-search" class="search-input" placeholder="Search models…" oninput="renderModelCatalog()">
     <select id="models-sort" onchange="renderModelCatalog()">
       <option value="tokens">Most used</option>
       <option value="name">Name</option>
@@ -42,9 +42,9 @@
       <option value="json_mode">JSON Mode</option>
       <option value="audio">Audio</option>
     </select>
-    <input type="number" id="filter-min-ctx" placeholder="Min context" oninput="renderModelCatalog()" style="width:120px">
-    <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" oninput="renderModelCatalog()" style="width:140px">
-    <span style="font-size:0.78rem;color:var(--text-dim)">Tokens measured over the last 7 days</span>
+    <input type="number" id="filter-min-ctx" placeholder="Min context" oninput="renderModelCatalog()">
+    <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" oninput="renderModelCatalog()">
+    <span class="filter-hint">Tokens measured over the last 7 days</span>
   </div>
   <div id="models-loading" class="skeleton skeleton-block"></div>
   <div id="models-cards" class="catalog-rows"></div>
