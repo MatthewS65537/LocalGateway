@@ -2,6 +2,7 @@
 function loadSettingsPage() {
   loadServerSettings();
   loadRoutingSettings();
+  loadCacheAffinitySettings();
   loadProbeSettings();
   loadDisplaySettings();
 }
@@ -103,6 +104,55 @@ async function saveRoutingSettings() {
   else toast('Failed to save routing settings', 'error');
 }
 
+async function loadCacheAffinitySettings() {
+  try {
+    const { data } = await fetchJSON('/admin/config');
+    const enabled = data.server?.cache_affinity_enabled === true;
+    const ttl = data.server?.cache_affinity_ttl_sec || 300;
+    const spill = data.server?.max_inflight_before_spill;
+    document.getElementById('settings-cache-affinity').checked = enabled;
+    const ttlSelect = document.getElementById('settings-cache-ttl');
+    if (ttlSelect) ttlSelect.value = String(ttl);
+    document.getElementById('settings-cache-spill').value = spill != null ? spill : '';
+    toggleCacheAffinity();
+  } catch(e) { console.error(e); }
+}
+
+function toggleCacheAffinity() {
+  const enabled = document.getElementById('settings-cache-affinity').checked;
+  document.getElementById('cache-affinity-options').classList.toggle('dimmed', !enabled);
+}
+
+async function saveCacheAffinitySettings() {
+  const enabled = document.getElementById('settings-cache-affinity').checked;
+  const ttl = parseInt(document.getElementById('settings-cache-ttl').value, 10) || 300;
+  const spillRaw = document.getElementById('settings-cache-spill').value.trim();
+  const spill = spillRaw === '' ? null : (parseInt(spillRaw, 10) || null);
+  const { ok } = await saveConfigSection(data => {
+    data.server = data.server || {};
+    data.server.cache_affinity_enabled = enabled;
+    data.server.cache_affinity_ttl_sec = ttl;
+    data.server.max_inflight_before_spill = spill;
+  });
+  if (ok) toast('Cache affinity settings saved', 'success');
+  else toast('Failed to save cache affinity settings', 'error');
+}
+
+async function clearWarmth() {
+  const confirmed = await showConfirm('Clear Warmth Data', 'This forgets every warm-cache entry. Routing returns to cold mode until requests warm up again.');
+  if (!confirmed) return;
+  try {
+    const r = await fetch('/admin/warmth', { method: 'DELETE' });
+    if (r.ok) { toast('Warmth data cleared', 'success'); }
+    else {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Failed to clear warmth data', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
 async function loadProbeSettings() {
   try {
     const { data } = await fetchJSON('/admin/config');
@@ -167,6 +217,240 @@ async function clearUsageData() {
   } catch(e) {
     toast('Error: ' + e.message, 'error');
   }
+}
+
+// ---------- time-based routing ----------
+let timeRoutingState = { modelId: null, tr: null };
+
+async function loadTimeRouting() {
+  const select = document.getElementById('tr-model-select');
+  const editor = document.getElementById('tr-editor');
+  try {
+    const { data } = await fetchJSON('/admin/config');
+    const selected = select.value;
+    select.innerHTML = '<option value="">Select a model…</option>' +
+      (data.models || []).map(m =>
+        `<option value="${escAttr(m.id)}">${esc(m.display_name || m.id)}</option>`
+      ).join('');
+    if (selected) select.value = selected;
+    const modelId = select.value;
+    if (!modelId) {
+      editor.classList.add('dimmed');
+      timeRoutingState = { modelId: null, tr: null };
+      return;
+    }
+    timeRoutingState.modelId = modelId;
+    const res = await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-routing');
+    timeRoutingState.tr = res.data || { enabled: false, timezone: 'UTC', slots: [] };
+    renderTimeRoutingEditor();
+  } catch(e) {
+    toast('Failed to load time routing: ' + e.message, 'error');
+  }
+}
+
+function renderTimeRoutingEditor() {
+  const tr = timeRoutingState.tr;
+  if (!tr) return;
+  const editor = document.getElementById('tr-editor');
+  editor.classList.remove('dimmed');
+  document.getElementById('tr-enabled').checked = tr.enabled !== false;
+  document.getElementById('tr-timezone').value = tr.timezone || 'UTC';
+  toggleTimeRouting();
+  renderTimeSlots(tr.slots || []);
+}
+
+function toggleTimeRouting() {
+  const enabled = document.getElementById('tr-enabled').checked;
+  document.getElementById('tr-options').classList.toggle('dimmed', !enabled);
+}
+
+function renderTimeSlots(slots) {
+  const wrap = document.getElementById('tr-slots');
+  if (!slots.length) {
+    wrap.innerHTML = '<p class="field-hint">No time slots yet. Add one to restrict which backends serve this model during a period.</p>';
+    return;
+  }
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  wrap.innerHTML = slots.map(slot => {
+    const dayStr = slot.days_of_week && slot.days_of_week.length
+      ? slot.days_of_week.map(d => days[d]).join(', ')
+      : 'Every day';
+    const hr = String(slot.start_hour).padStart(2, '0') + ':00 – ' + String(slot.end_hour).padStart(2, '0') + ':00';
+    const provs = slot.active_providers && slot.active_providers.length
+      ? slot.active_providers.join(', ')
+      : '(all backends)';
+    return '<div class="tr-slot-row' + (slot.enabled === false ? ' dimmed' : '') + '">' +
+      '<div class="tr-slot-main">' +
+        '<div class="hstack" style="gap:8px;align-items:center">' +
+          '<span class="badge ' + (slot.enabled === false ? 'badge-gray' : 'badge-green') + '">' + (slot.enabled === false ? 'off' : 'on') + '</span>' +
+          '<strong>' + esc(slot.name || slot.id) + '</strong>' +
+          '<span class="filter-hint">' + hr + '</span>' +
+          '<span class="filter-hint">·</span>' +
+          '<span class="filter-hint">' + esc(dayStr) + '</span>' +
+        '</div>' +
+        '<div class="filter-hint" style="margin-top:4px">Providers: <code>' + esc(provs) + '</code></div>' +
+      '</div>' +
+      '<div class="hstack" style="gap:8px">' +
+        '<button class="secondary btn-sm" onclick="showEditSlotModal(\'' + escAttr(slot.id) + '\')">Edit</button>' +
+        '<button class="danger btn-sm" onclick="deleteTimeSlot(\'' + escAttr(slot.id) + '\')">Delete</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function _slotHoursOptions(selected) {
+  return Array.from({ length: 24 }, (_, h) =>
+    '<option value="' + h + '"' + (selected === h ? ' selected' : '') + '>' + String(h).padStart(2, '0') + ':00</option>'
+  ).join('');
+}
+
+function _slotDaysCheckboxes(selectedDays) {
+  const sel = new Set(selectedDays || []);
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return days.map((d, i) =>
+    '<label class="cap-item"><input type="checkbox" data-day="' + i + '"' + (sel.has(i) ? ' checked' : '') + '> ' + d + '</label>'
+  ).join('');
+}
+
+async function _slotProviderOptions(selected) {
+  const { data } = await fetchJSON('/admin/config');
+  const model = (data.models || []).find(m => m.id === timeRoutingState.modelId);
+  const backends = model && model.backends || [];
+  const sel = new Set(selected || []);
+  if (!backends.length) {
+    return '<p class="field-hint">This model has no backends configured.</p>';
+  }
+  return backends.map(b => {
+    const key = b.provider + ':' + b.model;
+    return '<label class="cap-item"><input type="checkbox" data-provider="' + escAttr(key) + '"' + (sel.has(key) ? ' checked' : '') + '> <code>' + esc(key) + '</code></label>';
+  }).join('');
+}
+
+function showAddSlotModal() {
+  openTimeSlotModal(null);
+}
+function showEditSlotModal(slotId) {
+  const slot = (timeRoutingState.tr.slots || []).find(s => s.id === slotId);
+  if (!slot) return;
+  openTimeSlotModal(slot);
+}
+
+async function openTimeSlotModal(existing) {
+  const isEdit = !!existing;
+  const slot = existing || { name: '', start_hour: 0, end_hour: 23, days_of_week: [], active_providers: [], enabled: true };
+  const providerOptions = await _slotProviderOptions(slot.active_providers);
+  const overlay = openModal({
+    title: isEdit ? 'Edit Time Slot' : 'Add Time Slot',
+    widthClass: 'modal-lg',
+    bodyHtml:
+      '<div class="field-group">' +
+        '<div class="field"><label class="field-label" for="slot-name">Name</label>' +
+          '<input type="text" id="slot-name" value="' + esc(slot.name || '') + '" placeholder="e.g. Peak hours"></div>' +
+        '<div class="hstack"><div class="field" style="flex:1">' +
+          '<label class="field-label" for="slot-start">Start</label>' +
+          '<select id="slot-start">' + _slotHoursOptions(slot.start_hour) + '</select></div>' +
+          '<div class="field" style="flex:1">' +
+          '<label class="field-label" for="slot-end">End</label>' +
+          '<select id="slot-end">' + _slotHoursOptions(slot.end_hour) + '</select></div></div>' +
+        '<div class="field"><label class="field-label">Days of week (none = every day)</label>' +
+          '<div class="cap-grid" id="slot-days">' + _slotDaysCheckboxes(slot.days_of_week) + '</div></div>' +
+        '<div class="field"><label class="field-label">Active providers (none = all backends)</label>' +
+          '<div class="cap-grid" id="slot-providers">' + providerOptions + '</div></div>' +
+        '<label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">' +
+          '<input type="checkbox" id="slot-enabled"' + (slot.enabled === false ? '' : ' checked') + '> Enabled</label>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="secondary" data-cancel>Cancel</button>' +
+        '<button class="primary" data-ok>' + (isEdit ? 'Save' : 'Add') + '</button></div>',
+    onMount: (ov) => {
+      ov.querySelector('[data-cancel]').onclick = () => closeModal(ov);
+      ov.querySelector('[data-ok]').onclick = () => {
+        const payload = _collectSlotPayload(existing);
+        if (!payload) return;
+        if (isEdit) updateTimeSlot(existing.id, payload, ov);
+        else createTimeSlot(payload, ov);
+      };
+    },
+  });
+}
+
+function _collectSlotPayload(existing) {
+  const name = document.getElementById('slot-name').value.trim();
+  const start = parseInt(document.getElementById('slot-start').value, 10);
+  const end = parseInt(document.getElementById('slot-end').value, 10);
+  const days = [...document.querySelectorAll('#slot-days input[data-day]:checked')].map(cb => parseInt(cb.dataset.day, 10));
+  const providers = [...document.querySelectorAll('#slot-providers input[data-provider]:checked')].map(cb => cb.dataset.provider);
+  const enabled = document.getElementById('slot-enabled').checked;
+  const payload = { name, start_hour: start, end_hour: end, days_of_week: days, active_providers: providers, enabled };
+  if (existing && existing.id) payload.id = existing.id;
+  return payload;
+}
+
+async function createTimeSlot(payload, overlay) {
+  const modelId = timeRoutingState.modelId;
+  try {
+    const { ok, data } = await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-slots', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!ok) { toast('Failed to create time slot', 'error'); return; }
+    toast('Time slot added', 'success');
+    closeModal(overlay);
+    timeRoutingState.tr = (await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-routing')).data;
+    renderTimeRoutingEditor();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function updateTimeSlot(slotId, payload, overlay) {
+  const modelId = timeRoutingState.modelId;
+  try {
+    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-slots/' + encodeURIComponent(slotId), {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    if (!ok) { toast('Failed to update time slot', 'error'); return; }
+    toast('Time slot updated', 'success');
+    closeModal(overlay);
+    timeRoutingState.tr = (await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-routing')).data;
+    renderTimeRoutingEditor();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteTimeSlot(slotId) {
+  const modelId = timeRoutingState.modelId;
+  const confirmed = await showConfirm('Delete Time Slot', 'Delete this time slot?');
+  if (!confirmed) return;
+  try {
+    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-slots/' + encodeURIComponent(slotId), {
+      method: 'DELETE',
+    });
+    if (!ok) { toast('Failed to delete time slot', 'error'); return; }
+    toast('Time slot deleted', 'success');
+    timeRoutingState.tr = (await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-routing')).data;
+    renderTimeRoutingEditor();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function saveTimeRoutingConfig() {
+  const modelId = timeRoutingState.modelId;
+  if (!modelId) { toast('Select a model first', 'error'); return; }
+  const tr = {
+    enabled: document.getElementById('tr-enabled').checked,
+    timezone: document.getElementById('tr-timezone').value.trim() || 'UTC',
+    slots: (timeRoutingState.tr && timeRoutingState.tr.slots) || [],
+  };
+  try {
+    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(modelId) + '/time-routing', {
+      method: 'PUT',
+      body: JSON.stringify(tr),
+    });
+    if (ok) {
+      toast('Time routing saved', 'success');
+      timeRoutingState.tr = tr;
+    } else {
+      toast('Failed to save time routing', 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
 document.addEventListener('DOMContentLoaded', loadSettingsPage);

@@ -4,6 +4,9 @@ import hashlib
 from typing import Any
 
 WARMTH_TTL_DEFAULT = 300
+# Truncate each message to this many chars before hashing to keep the blob
+# bounded. Distinct messages longer than the cap are disambiguated with a
+# per-message length suffix so they cannot collide into the same fingerprint.
 _PREFIX_TRUNCATE = 2000
 
 
@@ -27,6 +30,17 @@ def _msg_text(msg: Any) -> str:
                 parts.append(str(part))
         return "\n".join(parts)
     return str(content)
+
+
+def _truncate(text: str) -> str:
+    """Truncate *text* and append its length plus a short hash of the full
+    text, so two distinct long messages that share a 2000-char prefix can
+    never produce the same fingerprint (the hash captures the tail that
+    truncation drops)."""
+    if len(text) > _PREFIX_TRUNCATE:
+        digest = hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:10]
+        return text[:_PREFIX_TRUNCATE] + f"…[{len(text)}:{digest}]"
+    return text
 
 
 def fingerprint(request_body: dict) -> str | None:
@@ -71,13 +85,13 @@ def fingerprint(request_body: dict) -> str | None:
     pieces: list[str] = []
     has_content = False
     for s in system_parts:
-        pieces.append(s[:_PREFIX_TRUNCATE])
+        pieces.append(_truncate(s))
         if s.strip():
             has_content = True
     for m in prefix_msgs:
         role = m.get("role", "") if isinstance(m, dict) else ""
-        text = _msg_text(m)[:_PREFIX_TRUNCATE]
-        pieces.append(f"{role}:{text}")
+        text = _msg_text(m)
+        pieces.append(f"{role}:{_truncate(text)}")
         if text.strip():
             has_content = True
 

@@ -26,6 +26,16 @@ function tierBgForTier(tierNum) {
   return `hsla(${tc.h}, 70%, 60%, 0.08)`;
 }
 
+// Prompt-cache participation badge for a backend row.
+// true  = explicitly supports prompt caching (always participates in affinity)
+// false = explicitly no caching (never warm)
+// null  = auto-detect via reported usage tokens
+function cacheBadge(b) {
+  if (b.cache_supported === true) return '<span class="badge badge-green" title="Explicitly supports prompt caching">cache</span>';
+  if (b.cache_supported === false) return '<span class="badge badge-gray" title="Explicitly no prompt caching">no cache</span>';
+  return '<span class="badge" style="opacity:0.6" title="Cache support auto-detected from usage tokens">auto</span>';
+}
+
 // Context range for the stat strip: min–max across active (enabled, non-snoozed)
 // backends. A model-level context_length override is shown as-is. Falls back to
 // all enabled backends when every active one is snoozed.
@@ -692,6 +702,7 @@ function renderDetailTable(backends) {
   const rows = backends.slice().sort((a, b) => {
     let va = a[col], vb = b[col];
     if (col === 'backend') { va = a.provider + a.backend_model; vb = b.provider + b.backend_model; }
+    if (col === 'cache_supported') { va = a.cache_supported === true ? 1 : a.cache_supported === false ? -1 : 0; vb = b.cache_supported === true ? 1 : b.cache_supported === false ? -1 : 0; }
     if (va == null) va = col === 'backend' ? '' : -Infinity;
     if (vb == null) vb = col === 'backend' ? '' : -Infinity;
     if (typeof va === 'string') return va.localeCompare(vb) * dir;
@@ -703,7 +714,7 @@ function renderDetailTable(backends) {
     th.textContent = th.textContent.replace(/ [↑↓]$/, '') + arrow;
   });
   const el = document.getElementById('detail-rows');
-  if (!rows.length) { el.innerHTML = '<tr><td colspan="14" class="empty">No providers configured.</td></tr>'; return; }
+  if (!rows.length) { el.innerHTML = '<tr><td colspan="15" class="empty">No providers configured.</td></tr>'; return; }
 
   const tierGroups = {};
   rows.forEach(b => {
@@ -746,6 +757,7 @@ function renderDetailTable(backends) {
         + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" onclick="editProviderPricing(this.dataset.provider, this.dataset.model)" title="Edit pricing">$</button></td>'
       + '<td>'+(b.context_length ? fmtTokens(b.context_length) : '—')+'</td>'
       + '<td>'+(b.max_output_tokens ? fmtTokens(b.max_output_tokens) : '—')+'</td>'
+      + '<td>'+cacheBadge(b)+'</td>'
       + '<td>'+fmtPricePrecise(b.input_price)+'</td>'
       + '<td>'+fmtPricePrecise(b.output_price)+'</td>'
       + '<td class="td-dim">'+(b.cache_read_price != null || b.cache_write_price != null ? fmtPricePrecise(b.cache_read_price)+' / '+fmtPricePrecise(b.cache_write_price) : '— / —')+'</td>'
@@ -997,6 +1009,13 @@ function showAddBackendModal() {
         '<div id="new-backend-model-list" class="discover-list" style="display:none"></div></div>' +
       '<div class="field"><label class="field-label" for="new-backend-priority">Priority (Tier)</label>' +
         '<input type="number" id="new-backend-priority" value="1" min="1"></div>' +
+      '<div class="field"><label class="field-label" for="new-backend-cache">Prompt Cache</label>' +
+        '<select id="new-backend-cache">' +
+          '<option value="" selected>Auto-detect</option>' +
+          '<option value="true">Supports prompt caching</option>' +
+          '<option value="false">No prompt caching</option>' +
+        '</select>' +
+        '<div class="field-hint">Auto-detect trusts usage tokens; set explicitly to stop/force cache-affinity participation.</div></div>' +
       '<div class="modal-actions">' +
         '<button class="secondary" data-cancel>Cancel</button>' +
         '<button class="primary" data-ok>Add</button></div>',
@@ -1053,6 +1072,8 @@ async function addBackend(overlay) {
   const provider = document.getElementById('new-backend-provider').value;
   const model = document.getElementById('new-backend-model').value.trim();
   const priority = parseInt(document.getElementById('new-backend-priority').value, 10) || 1;
+  const cacheRaw = document.getElementById('new-backend-cache').value;
+  const cacheSupported = cacheRaw === '' ? null : cacheRaw === 'true';
   if (!provider || !model) { toast('Provider and model are required', 'error'); return; }
   const okBtn = overlay && overlay.querySelector('[data-ok]');
   if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'Adding…'; }
@@ -1060,7 +1081,7 @@ async function addBackend(overlay) {
     const cfgModel = currentConfig && currentConfig.models.find(m => m.id === modelDetailState.id);
     if (!cfgModel) { toast('Model not found', 'error'); return; }
     cfgModel.backends = cfgModel.backends || [];
-    cfgModel.backends.push({ provider, model, priority, enabled: true });
+    cfgModel.backends.push({ provider, model, priority, enabled: true, cache_supported: cacheSupported });
     const r = await fetch('/admin/config', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},

@@ -38,6 +38,18 @@ def slot_matches(slot: TimeSlot, now: _dt.datetime) -> bool:
     return _hour_in_range(now.hour, slot.start_hour, slot.end_hour)
 
 
+def _to_tz(now: _dt.datetime, tz_name: str) -> _dt.datetime:
+    """Convert *now* to *tz_name*.  If *now* is naive it is assumed UTC."""
+    try:
+        from zoneinfo import ZoneInfo
+        target = ZoneInfo(tz_name)
+    except (ImportError, KeyError):
+        target = _dt.timezone.utc
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_dt.timezone.utc)
+    return now.astimezone(target)
+
+
 def get_active_slot(
     slots: list[TimeSlot],
     tz_name: str,
@@ -45,10 +57,12 @@ def get_active_slot(
 ) -> TimeSlot | None:
     """Return the first matching **enabled** slot, or ``None``.
 
-    Slots are evaluated in order; the first match wins.
+    *now* (if provided) is converted to *tz_name* before checking.
     """
     if now is None:
         now = current_time_in_tz(tz_name)
+    else:
+        now = _to_tz(now, tz_name)
     for slot in slots:
         if slot_matches(slot, now):
             return slot
