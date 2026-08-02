@@ -58,7 +58,22 @@
       "aliases": ["my-model-alias"],
       "default_params": {},
       "display_name": "My Model",
-      "avatar": ""
+      "avatar": "",
+      "time_routing": {
+        "enabled": false,
+        "timezone": "UTC",
+        "slots": [
+          {
+            "id": "peak-9-17",
+            "name": "Peak hours",
+            "start_hour": 9,
+            "end_hour": 17,
+            "days_of_week": [0, 1, 2, 3, 4],
+            "active_providers": ["my-provider:upstream-model-name"],
+            "enabled": true
+          }
+        ]
+      }
     }
   ],
   "pricing": {

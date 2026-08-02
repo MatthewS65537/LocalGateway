@@ -163,6 +163,7 @@ A logical model maps one ID to multiple backends with priorities.
 | `default_params` | `{}` | Params merged into client requests (client wins) |
 | `enabled` | `true` | Expose to clients |
 | `avatar` | `""` | Custom avatar text |
+| `time_routing` | — | Per-model time-based routing (see below, off by default) |
 
 #### `backends[]`
 
@@ -220,6 +221,34 @@ Clients can steer routing per request with an OpenRouter-style `provider` field 
 ```
 
 Responses disclose the chosen backend via `X-Provider` and `X-Backend` headers.
+
+### Time-based routing (per-model, off by default)
+
+Each model can define **time slots** — time windows during which only specific provider backends serve traffic. During a matching slot, excluded backends are filtered out *before* the tier / cache-affinity logic runs, so the existing routing rules still apply within the active set.
+
+```jsonc
+"time_routing": {
+  "enabled": false,      // OFF by default; enable per-model
+  "timezone": "UTC",     // IANA timezone name
+  "slots": [
+    {
+      "id": "peak-9-17",  // auto-generated when blank
+      "name": "Peak hours",
+      "start_hour": 9,
+      "end_hour": 17,
+      "days_of_week": [0, 1, 2, 3, 4],  // 0=Mon..6=Sun; empty = every day
+      "active_providers": ["provider-a:gpt-4o", "provider-b:gpt-4o"],
+      "enabled": true
+    }
+  ]
+}
+```
+
+- **`start_hour` / `end_hour`**: 24h hours (0–23). Wraps at midnight (e.g. `start_hour=22, end_hour=6`).
+- **`active_providers`**: `provider:model` backend whitelist. Empty list = all backends pass (opt-out style).
+- **`days_of_week`**: 0=Mon..6=Sun. Empty = every day.
+- Slots are evaluated in order; the first matching enabled slot wins.
+- If no slot matches, all backends pass (same as having the feature off).
 
 ### Cache affinity (optional)
 
