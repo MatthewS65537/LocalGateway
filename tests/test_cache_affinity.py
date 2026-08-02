@@ -100,6 +100,24 @@ def test_fingerprint_none_on_empty():
     assert fingerprint({"messages": [{"role": "user", "content": ""}]}) is None
 
 
+def test_fingerprint_no_collision_beyond_truncation():
+    """Two distinct prompts sharing a >2000-char prefix must not collide.
+
+    The prefix is truncated to keep the hash input bounded; a length marker
+    disambiguates truncation so two different long prompts can never warm
+    each other's cache slot.
+    """
+    base = "A" * 2100
+    b1 = {"messages": [{"role": "user", "content": base + "X"}]}
+    b2 = {"messages": [{"role": "user", "content": base + "Y"}]}
+    # Differ only past the truncation point -> must differ.
+    assert fingerprint(b1) != fingerprint(b2)
+    # A prompt exactly at the cap still differs from one that is longer.
+    at_cap = {"messages": [{"role": "user", "content": "A" * 2000}]}
+    over_cap = {"messages": [{"role": "user", "content": "A" * 2001}]}
+    assert fingerprint(at_cap) != fingerprint(over_cap)
+
+
 # ---------------------------------------------------------------- stickiness
 
 
@@ -325,3 +343,42 @@ def test_no_cache_key_no_affinity():
     order = _ids(select_backends(cfg, "m", cache_key=None))
     assert order[0] in ("a", "b")
     assert order[2] == "c"
+
+# ---------------------------------------------------------------- warmth registry API
+
+
+async def test_warmth_endpoint_lists_and_clears(client):
+    """GET /admin/warmth exposes the registry; DELETE clears it."""
+    stats_mod.record_cache_activity(
+        provider_id="mock1", backend_model="mock-reasoner", cache_key="fp1",
+        cached_tokens=100, cache_write_tokens=0, input_tokens=50,
+        cache_supported=True,
+    )
+    r = await client.get("/admin/warmth")
+    assert r.status_code == 200
+    data = r.json()
+    assert "fp1" in data
+    assert "mock1:mock-reasoner" in data["fp1"]
+    assert data["fp1"]["mock1:mock-reasoner"]["hit_count"] == 1
+
+    r2 = await client.delete("/admin/warmth")
+    assert r2.status_code == 200
+    r3 = await client.get("/admin/warmth")
+    assert r3.status_code == 200
+    assert r3.json() == {}
+
+
+async def test_backend_cache_supported_update_via_api(client):
+    """PUT /admin/models/{id}/backends/{index} accepts cache_supported."""
+    r = await client.put("/admin/models/mock-reasoner/backends/0", json={
+        "cache_supported": True,
+    })
+    assert r.status_code == 200
+    r2 = await client.get("/admin/models/mock-reasoner")
+    assert r2.status_code == 200
+    assert r2.json()["backends"][0]["cache_supported"] is True
+    # Unknown fields still rejected.
+    r3 = await client.put("/admin/models/mock-reasoner/backends/0", json={
+        "bogus_field": 1,
+    })
+    assert r3.status_code == 422

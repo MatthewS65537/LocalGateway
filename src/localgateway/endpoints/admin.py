@@ -51,6 +51,7 @@ BACKEND_SETTABLE = {
     "enabled": bool,
     "context_length": (int, type(None)),
     "max_output_tokens": (int, type(None)),
+    "cache_supported": (bool, type(None)),
 }
 
 
@@ -235,6 +236,7 @@ async def model_stats(model_id: str, hours: int = 168, p: str = "p50"):
             "backend_model": b.model,
             "priority": b.priority,
             "enabled": b.enabled and (provider.enabled if provider else False),
+            "cache_supported": b.cache_supported,
             "context_length": b.context_length,
             "max_output_tokens": b.max_output_tokens,
             "input_price": pricing.input,
@@ -408,6 +410,7 @@ async def get_model(model_id: str):
             "model": b.model,
             "priority": b.priority,
             "enabled": b.enabled and (provider.enabled if provider else False),
+            "cache_supported": b.cache_supported,
             "context_length": b.context_length,
             "max_output_tokens": b.max_output_tokens,
             "input_price": pricing.input,
@@ -721,6 +724,20 @@ async def rate_limits_endpoint():
 async def inflight_endpoint():
     snap = stats.snapshot()
     return JSONResponse({k: v.get("in_flight", 0) for k, v in snap.items()})
+
+
+@router.get("/admin/warmth")
+async def get_warmth():
+    """Cache-affinity warmth registry: which backends are warm for which
+    request fingerprints, with hit/miss/write counts and last-seen time."""
+    return JSONResponse(stats.warmth_snapshot())
+
+
+@router.delete("/admin/warmth")
+async def clear_warmth():
+    """Reset the warmth registry (all fingerprints become cold)."""
+    stats.clear_warmth()
+    return JSONResponse({"status": "ok"})
 
 
 @router.post("/admin/backends/snooze")

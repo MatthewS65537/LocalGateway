@@ -2,6 +2,7 @@
 function loadSettingsPage() {
   loadServerSettings();
   loadRoutingSettings();
+  loadCacheAffinitySettings();
   loadProbeSettings();
   loadDisplaySettings();
 }
@@ -101,6 +102,56 @@ async function saveRoutingSettings() {
   });
   if (ok) toast('Routing settings saved', 'success');
   else toast('Failed to save routing settings', 'error');
+}
+
+
+async function loadCacheAffinitySettings() {
+  try {
+    const { data } = await fetchJSON('/admin/config');
+    const enabled = data.server?.cache_affinity_enabled === true;
+    const ttl = data.server?.cache_affinity_ttl_sec || 300;
+    const spill = data.server?.max_inflight_before_spill;
+    document.getElementById('settings-cache-affinity').checked = enabled;
+    const ttlSelect = document.getElementById('settings-cache-ttl');
+    if (ttlSelect) ttlSelect.value = String(ttl);
+    document.getElementById('settings-cache-spill').value = spill != null ? spill : '';
+    toggleCacheAffinity();
+  } catch(e) { console.error(e); }
+}
+
+function toggleCacheAffinity() {
+  const enabled = document.getElementById('settings-cache-affinity').checked;
+  document.getElementById('cache-affinity-options').classList.toggle('dimmed', !enabled);
+}
+
+async function saveCacheAffinitySettings() {
+  const enabled = document.getElementById('settings-cache-affinity').checked;
+  const ttl = parseInt(document.getElementById('settings-cache-ttl').value, 10) || 300;
+  const spillRaw = document.getElementById('settings-cache-spill').value.trim();
+  const spill = spillRaw === '' ? null : (parseInt(spillRaw, 10) || null);
+  const { ok } = await saveConfigSection(data => {
+    data.server = data.server || {};
+    data.server.cache_affinity_enabled = enabled;
+    data.server.cache_affinity_ttl_sec = ttl;
+    data.server.max_inflight_before_spill = spill;
+  });
+  if (ok) toast('Cache affinity settings saved', 'success');
+  else toast('Failed to save cache affinity settings', 'error');
+}
+
+async function clearWarmth() {
+  const confirmed = await showConfirm('Clear Warmth Data', 'This forgets every warm-cache entry. Routing returns to cold mode until requests warm up again.');
+  if (!confirmed) return;
+  try {
+    const r = await fetch('/admin/warmth', { method: 'DELETE' });
+    if (r.ok) { toast('Warmth data cleared', 'success'); }
+    else {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Failed to clear warmth data', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
 }
 
 async function loadProbeSettings() {

@@ -225,6 +225,11 @@ Responses disclose the chosen backend via `X-Provider` and `X-Backend` headers.
 
 When `server.cache_affinity_enabled` is `true`, the router prefers backends that have a warm prompt cache for the current request fingerprint (sha1 of the system prompt + all but the final user turn). Selection uses a 5-band priority — warm+idle > warm+busy > cold+idle > cold+busy > ratelimited — so cache hits take precedence over tiers and round-robin. This is off by default and changes nothing when disabled.
 
+- **Warmth** is recorded per backend when a request succeeds on a cache-capable backend (explicit `cache_supported` on the backend, or auto-detected from reported `prompt_tokens.cached_tokens` / `cache_creation_input_tokens` usage). A successful response without cache tokens still warms a backend declared `cache_supported: true`, so non-reporting providers participate when you opt them in.
+- **Fingerprints** are bounded: messages are truncated to 2000 chars and disambiguated with a per-message length + tail hash, so distinct long prompts never collide onto the same cache slot.
+- **`max_inflight_before_spill`** caps concurrency on a warm backend; beyond it, traffic spills to cold backends.
+- Configure all of this from **Settings → Cache Affinity** in the UI. `GET/DELETE /admin/warmth` exposes/resets the live warmth registry (also available from the Settings page via *Clear Warmth Data*).
+
 ## Testing
 
 The suite uses `pytest` with `pytest-asyncio`. A mock upstream provider is spun up per test.
