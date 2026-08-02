@@ -13,18 +13,21 @@
       <div class="hero-slug" id="detail-slug-row"></div>
       <div class="hero-desc" id="detail-desc"></div>
       <div class="hero-btns">
-        <button class="secondary" onclick="toggleMetadataEdit()" id="metadata-edit-btn">✎ Edit metadata</button>
+        <button class="secondary" onclick="showMetadataDrawer()" id="metadata-show-btn">☰ Metadata</button>
+        <button class="secondary" onclick="editModelMetadata()" id="metadata-edit-btn">✎ Edit metadata</button>
         <button class="secondary" id="probe-now-btn" onclick="probeModelNow()">Probe now</button>
         <button class="secondary" onclick="location.href='/compare/{{ model_id }}'">Compare</button>
       </div>
     </div>
   </div>
 
-  <div class="detail-stat-strip" id="detail-stat-strip"></div>
+  <div class="detail-stat-row" id="detail-stat-row">
+    <div class="detail-stat-strip" id="detail-stat-strip"></div>
+    <div class="detail-stat-strip" id="detail-stat-strip-2"></div>
+  </div>
 
   <nav class="detail-subnav" id="detail-subnav">
     <a href="#providers" class="active" data-anchor="providers">Providers</a>
-    <a href="#metadata" data-anchor="metadata">Metadata</a>
     <a href="#chart" data-anchor="chart">Throughput</a>
   </nav>
 
@@ -75,78 +78,6 @@
     </div>
   </section>
 
-  <section id="metadata" class="detail-section">
-    <div class="card">
-      <div class="card-head"><h2>Model Metadata</h2></div>
-      <div id="metadata-display">
-        <div id="meta-grid" class="meta-grid">
-          <div class="meta-row" data-field="display_name"><span class="meta-label">Display Name</span><span class="meta-val" id="meta-display-name"></span></div>
-          <div class="meta-row" data-field="description"><span class="meta-label">Description</span><span class="meta-val" id="meta-description"></span></div>
-          <div class="meta-row" data-field="slug"><span class="meta-label">Model Slug</span><span class="meta-val"><code id="meta-slug"></code> <button class="icon-btn btn-sm" onclick="editModelSlug()" title="Edit slug">✎</button></span></div>
-          <div class="meta-row" data-field="modality"><span class="meta-label">Modality</span><span class="meta-val" id="meta-modality"></span></div>
-          <div class="meta-row" data-field="max_output"><span class="meta-label">Max Output</span><span class="meta-val" id="meta-max-output"></span></div>
-          <div class="meta-row" data-field="tags"><span class="meta-label">Tags</span><span class="meta-val" id="meta-tags"></span></div>
-          <div class="meta-row" data-field="aliases"><span class="meta-label">Aliases</span><span class="meta-val" id="meta-aliases"></span></div>
-          <div class="meta-row" data-field="default_params"><span class="meta-label">Default Params</span><span class="meta-val"><code id="meta-default-params" style="font-size:0.82em"></code></span></div>
-          <div class="meta-row" data-field="capabilities"><span class="meta-label">Capabilities</span><span class="meta-val" id="meta-capabilities"></span></div>
-        </div>
-      </div>
-      <div id="metadata-edit" class="hidden">
-        <div class="field-group">
-          <div class="field">
-            <label class="field-label" for="edit-display-name">Display Name</label>
-            <input type="text" id="edit-display-name">
-          </div>
-          <div class="field">
-            <label class="field-label" for="edit-description">Description</label>
-            <input type="text" id="edit-description" placeholder="Optional description">
-          </div>
-          <div class="field">
-            <label class="field-label" for="edit-modality">Modality</label>
-            <select id="edit-modality">
-              <option value="">None</option>
-              <option value="text">Text</option>
-              <option value="text+vision">Text + Vision</option>
-              <option value="multimodal">Multimodal</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label" for="edit-max-output">Max Output Tokens</label>
-            <input type="number" id="edit-max-output">
-          </div>
-          <div class="field">
-            <label class="field-label" for="edit-tags">Tags (comma-separated)</label>
-            <input type="text" id="edit-tags" placeholder="fast,cheap,smart">
-          </div>
-          <div class="field">
-            <label class="field-label" for="edit-aliases">Aliases (comma-separated)</label>
-            <input type="text" id="edit-aliases" placeholder="gpt-4,gpt4">
-          </div>
-          <div class="field">
-            <label class="field-label" for="edit-default-params">Default Params (JSON)</label>
-            <textarea id="edit-default-params" rows="3" placeholder='{"temperature":0.7,"max_tokens":2048}' style="font-family:var(--font-mono);font-size:0.82rem"></textarea>
-          </div>
-          <div class="field">
-            <label class="field-label">Capabilities</label>
-            <div class="cap-grid">
-              <label class="cap-item"><input type="checkbox" id="cap-text"> Text</label>
-              <label class="cap-item"><input type="checkbox" id="cap-vision"> Vision</label>
-              <label class="cap-item"><input type="checkbox" id="cap-audio"> Audio</label>
-              <label class="cap-item"><input type="checkbox" id="cap-tools"> Tools</label>
-              <label class="cap-item"><input type="checkbox" id="cap-json_mode"> JSON Mode</label>
-              <label class="cap-item"><input type="checkbox" id="cap-parallel_tool_calls"> Parallel Tools</label>
-              <label class="cap-item"><input type="checkbox" id="cap-streaming"> Streaming</label>
-            </div>
-          </div>
-          <div class="hstack" style="justify-content:flex-end">
-            <button class="secondary" onclick="toggleMetadataEdit()">Cancel</button>
-            <button class="primary" onclick="saveModelMetadata()">Save</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <section id="chart" class="detail-section">
     <div class="card">
       <div class="card-head">
@@ -177,6 +108,30 @@
     <p><strong>Tiers:</strong> Providers in the same tier share traffic. If all tier-1 providers fail, gateway falls back to tier-2.</p>
     <p><strong>Drag &amp; Drop:</strong> Drag providers between tiers. Drop on a tier to add to it.</p>
     <p><strong>Probe:</strong> Test providers with small requests to verify connectivity and measure latency.</p>
+  </div>
+</div>
+<button id="right-edge-toggle" class="right-edge-toggle" onclick="toggleMetadataDrawer()" title="Toggle metadata" aria-label="Toggle metadata">
+  <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>
+  <span class="edge-label">Metadata</span>
+</button>
+<div id="metadata-drawer-backdrop" class="drawer-backdrop hidden" onclick="hideMetadataDrawer()"></div>
+<div id="metadata-drawer" class="detail-drawer hidden">
+  <div class="drawer-head">
+    <h3>Metadata — <span id="drawer-model-title"></span></h3>
+    <button class="ghost" onclick="hideMetadataDrawer()" aria-label="Close">&times;</button>
+  </div>
+  <div class="drawer-body">
+    <div id="meta-grid" class="meta-grid">
+      <div class="meta-row" data-field="display_name"><span class="meta-label">Display Name</span><span class="meta-val" id="meta-display-name"></span></div>
+      <div class="meta-row" data-field="description"><span class="meta-label">Description</span><span class="meta-val" id="meta-description"></span></div>
+      <div class="meta-row" data-field="slug"><span class="meta-label">Model Slug</span><span class="meta-val"><code id="meta-slug"></code></span></div>
+      <div class="meta-row" data-field="modality"><span class="meta-label">Modality</span><span class="meta-val" id="meta-modality"></span></div>
+      <div class="meta-row" data-field="max_output"><span class="meta-label">Max Output</span><span class="meta-val" id="meta-max-output"></span></div>
+      <div class="meta-row" data-field="tags"><span class="meta-label">Tags</span><span class="meta-val" id="meta-tags"></span></div>
+      <div class="meta-row" data-field="aliases"><span class="meta-label">Aliases</span><span class="meta-val" id="meta-aliases"></span></div>
+      <div class="meta-row" data-field="default_params"><span class="meta-label">Default Params</span><span class="meta-val"><code id="meta-default-params" style="font-size:0.82em"></code></span></div>
+      <div class="meta-row" data-field="capabilities"><span class="meta-label">Capabilities</span><span class="meta-val" id="meta-capabilities"></span></div>
+    </div>
   </div>
 </div>
 {% endblock %}

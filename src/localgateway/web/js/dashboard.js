@@ -45,12 +45,44 @@ async function loadHealth() {
     }).join('');
     healthEl.innerHTML = rows || '<div class="empty">No providers configured</div>';
     const rl = Object.entries(data.rate_limits||{}).map(([k,v]) =>
-      '<div class="provider-row"><div class="provider-info"><code>'+esc(k)+'</code></div><span class="badge '+(v < 0 ? 'badge-gray">snoozed' : 'badge-yellow">'+v.toFixed(0)+'s left')+'</span></div>').join('');
+      '<div class="provider-row"><div class="provider-info"><code>'+esc(k)+'</code></div>'
+      + '<span class="badge '+(v < 0 ? 'badge-gray">snoozed' : 'badge-yellow">'+v.toFixed(0)+'s left')+'</span>'
+      + '<button class="icon-btn danger" data-unsnooze="'+escAttr(k)+'" title="Remove this snooze/rate limit">✕</button></div>').join('');
     rlEl.innerHTML = rl || '<div class="empty">No active rate limits</div>';
   } catch(e) {
     healthEl.innerHTML = '<div class="notice">Gateway is stopped.</div>';
   }
 }
+
+function unsnoozeRateLimit(key, btn) {
+  if (!key) return;
+  const i = key.indexOf(':');
+  if (i < 0) { toast('Invalid rate-limit key: ' + key, 'error'); return; }
+  const provider = key.slice(0, i), model = key.slice(i + 1);
+  fetchJSON('/admin/backends/unsnooze', {
+    method: 'POST', body: JSON.stringify({ provider, model }),
+  }).then(({ ok }) => {
+    if (!ok) { toast('Failed to remove rate limit', 'error'); return; }
+    toast('Snooze removed: ' + key, 'success');
+    loadHealth();
+  }).catch(e => toast('Failed: ' + e.message, 'error'));
+}
+
+async function clearRateLimits() {
+  const confirmed = await showConfirm('Clear All Rate Limits', 'This removes every snooze and rate-limit cooldown, including the ones that are no longer tied to a configured backend.');
+  if (!confirmed) return;
+  try {
+    const r = await fetch('/admin/backends/unsnooze-all', { method: 'POST' });
+    const d = await r.json();
+    if (r.ok) { toast('Cleared ' + (d.cleared || 0) + ' rate limit(s)', 'success'); loadHealth(); }
+    else toast(d.error || 'Failed to clear rate limits', 'error');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-unsnooze]');
+  if (btn) unsnoozeRateLimit(btn.dataset.unsnooze, btn);
+});
 
 async function savePortFromDash() {
   const port = parseInt(document.getElementById('dash-port-input').value, 10);

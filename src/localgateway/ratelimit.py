@@ -61,6 +61,16 @@ class RateLimitState:
             self._cooldowns.pop(key, None)
             self._permanent.discard(key)
 
+    def clear(self) -> int:
+        """Remove ALL snooze/cooldown state (permanent + timed). Returns keys cleared."""
+        with self._lock:
+            count = len(self._permanent) + len(self._cooldowns)
+            self._permanent = set()
+            self._cooldowns = {}
+        if count:
+            self.save()
+        return count
+
     def is_available(self, provider_id: str, model: str) -> bool:
         """True if the provider is NOT rate-limited (available to serve)."""
         key = self._key(provider_id, model)

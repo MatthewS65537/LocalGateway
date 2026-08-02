@@ -308,18 +308,80 @@ function closeCommandPalette() {
   document.getElementById('command-palette').classList.add('hidden');
 }
 
+// Subsequence fuzzy scorer: returns a score >= 0 if every char of `q` appears
+// in `text` in order, else -1. Lower score = better match; contiguous runs
+// (and matches at word starts) rank higher.
+function _fuzzyScore(q, text) {
+  const t = String(text || '').toLowerCase();
+  q = String(q || '').toLowerCase();
+  if (!q) return 0;
+  if (t === q) return 0;
+  let score = 0, qi = 0, last = -2;
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] === q[qi]) {
+      score += (i === last + 1) ? 0 : (i === 0 || t[i-1] === ' ' || t[i-1] === '-' || t[i-1] === '_' ? 0 : 3);
+      last = i;
+      qi++;
+    }
+  }
+  if (qi < q.length) return -1;
+  return score + t.length - q.length;
+}
+
+// Global invalidation so callers can drop the cached palette index after any
+// config mutation (add/rename/delete model or provider).
+function invalidatePalette() { paletteIndex = null; }
+
+// Save a scoped change to config with optimistic-concurrency handling.
+// mutate(data) applies the edit to a fresh GET copy; on a 409 (config changed
+// since load) we re-GET and retry up to `maxRetries` times. On success we
+// invalidate the palette so the fuzzy command index stays fresh. Returns the
+// {ok, status} of the final attempt.
+async function saveConfigSection(mutate, { maxRetries = 2, onConflict = null } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let data;
+    try {
+      const res = await fetchJSON('/admin/config');
+      if (!res.ok) { toast('Failed to load config', 'error'); return { ok: false, status: res.status }; }
+      data = res.data;
+    } catch (e) { toast('Error: ' + e.message, 'error'); return { ok: false, status: 0 }; }
+    mutate(data);
+    const put = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
+    if (put.status === 409) {
+      if (onConflict) onConflict();
+      continue; // re-GET on next iteration and retry
+    }
+    if (put.ok) invalidatePalette();
+    return { ok: put.ok, status: put.status };
+  }
+  toast('Config kept changing; please retry.', 'error');
+  return { ok: false, status: 409 };
+}
+
 function _paletteMatches(q, item) {
   if (!q) return true;
-  return item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q);
+  return _fuzzyScore(q, item.label) >= 0 || _fuzzyScore(q, item.hint) >= 0;
 }
 
 function renderPaletteResults(query) {
   const results = document.getElementById('palette-results');
   const q = query.toLowerCase();
 
-  const actionMatches = COMMANDS.map((c, i) => ({ ...c, _i: i })).filter(c => _paletteMatches(q, c));
-  const modelMatches = paletteIndex ? paletteIndex.models.filter(m => _paletteMatches(q, m)) : [];
-  const providerMatches = paletteIndex ? paletteIndex.providers.filter(p => _paletteMatches(q, p)) : [];
+  const _score = (item) => {
+    const sl = _fuzzyScore(q, item.label);
+    const sh = _fuzzyScore(q, item.hint);
+    return Math.min(sl >= 0 ? sl : Infinity, sh >= 0 ? sh : Infinity);
+  };
+
+  const actionMatches = COMMANDS.map((c, i) => ({ ...c, _i: i }))
+    .filter(c => _paletteMatches(q, c))
+    .sort((a, b) => _score(a) - _score(b));
+  const modelMatches = (paletteIndex ? paletteIndex.models : [])
+    .filter(m => _paletteMatches(q, m))
+    .sort((a, b) => _score(a) - _score(b));
+  const providerMatches = (paletteIndex ? paletteIndex.providers : [])
+    .filter(p => _paletteMatches(q, p))
+    .sort((a, b) => _score(a) - _score(b));
 
   if (!actionMatches.length && !modelMatches.length && !providerMatches.length) {
     results.innerHTML = '<div class="palette-item"><span class="label">No results</span></div>';
@@ -442,5 +504,18 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- shared init ----------
+let _statusTimer = null;
+function startStatusPolling() {
+  if (_statusTimer) return;
+  _statusTimer = setInterval(loadServerStatus, 5000);
+}
+function stopStatusPolling() {
+  if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
+}
+// Pause background polling when the tab is hidden to avoid wasteful requests.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopStatusPolling();
+  else { loadServerStatus(); startStatusPolling(); }
+});
 loadServerStatus();
-setInterval(loadServerStatus, 5000);
+startStatusPolling();

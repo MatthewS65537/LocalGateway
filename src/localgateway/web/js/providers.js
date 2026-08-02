@@ -70,6 +70,22 @@ async function deleteProvider(id) {
   await saveCurrentConfig();
   toast('Provider deleted', 'info');
 }
+async function revealEditKey(btn) {
+  const wrap = btn.closest('.api-key-wrap');
+  const input = wrap.querySelector('.edit-key');
+  const pid = input.dataset.provider;
+  if (input.type === 'password') {
+    try {
+      const r = await fetch('/admin/config/api-key/' + encodeURIComponent(pid));
+      const d = await r.json();
+      if (r.ok) { input.value = d.api_key || ''; input.type = 'text'; btn.textContent = 'hide'; }
+      else toast('Cannot reveal: ' + (d.error || r.status), 'error');
+    } catch(e) { toast('Error: ' + e.message, 'error'); }
+  } else {
+    input.type = 'password'; btn.textContent = 'show';
+  }
+}
+
 async function saveProviderEdit(btn) {
   const section = btn.closest('.form-section');
   const id = section.dataset.providerId;
@@ -80,7 +96,10 @@ async function saveProviderEdit(btn) {
   const newName = val('.edit-name') || newId;
   p.name = newName;
   p.base_url = val('.edit-url');
-  p.api_key = val('.edit-key');
+  const keyInput = section.querySelector('.edit-key');
+  const typedKey = keyInput ? keyInput.value.trim() : '';
+  const keyChanged = typedKey !== '';
+  if (keyChanged) p.api_key = typedKey;
   p.timeout = parseFloat(val('.edit-timeout')) || 120;
   p.avatar = val('.edit-avatar');
 
@@ -135,22 +154,17 @@ function renderProviders() {
         + '<div class="form-row"><label>Name</label><input type="text" class="edit-name" value="'+esc(p.name||p.id)+'"></div>'
         + '<div class="form-row"><label>Avatar</label><input type="text" class="edit-avatar" value="'+esc(p.avatar||'')+'" placeholder="e.g. OG, GPT, ☁️" maxlength="8" title="Custom text for the avatar tile"></div>'
         + '<div class="form-row"><label>Base URL</label><input type="text" class="edit-url" value="'+esc(p.base_url)+'"></div>'
-        + '<div class="form-row"><label>API Key</label><div class="api-key-wrap"><input type="password" class="edit-key" value="'+esc(p.api_key||'')+'"><button class="reveal-btn" onclick="toggleReveal(this.closest(\'.api-key-wrap\').querySelector(\'.edit-key\'), this)">show</button></div></div>'
+        + '<div class="form-row"><label>API Key</label><div class="api-key-wrap"><input type="password" class="edit-key" value="" data-provider="'+escAttr(p.id)+'" placeholder="'+esc(p.api_key ? '•••••• (unchanged)' : 'no key set')+'" autocomplete="new-password"><button class="reveal-btn" onclick="revealEditKey(this)">show</button></div><div class="form-hint">Key is stored securely; leave blank to keep the current key, or type a new one.</div></div>'
         + '<div class="form-row"><label>Timeout (s)</label><input type="number" class="edit-timeout" value="'+(p.timeout||120)+'"></div>'
         + '<div class="actions"><button onclick="saveProviderEdit(this)">Save Changes</button><button class="secondary" onclick="cancelEditProvider(this)">Cancel</button></div>'
         + '</div>';
     }
     const enabled = p.enabled !== false;
-    const mode = p.reasoning_mode || 'auto';
     const disc = discoveryOpen === p.id ? renderDiscovery(p.id) : '';
     return '<div class="provider-row'+(enabled ? '' : ' is-disabled')+'">'
       + '<div class="provider-info hstack">'+providerAvatar(p.id, 30, p.avatar)
       + '<span><span class="provider-name">'+esc(p.name||p.id)+'</span><code class="provider-id">'+esc(p.id)+'</code><div class="provider-url">'+esc(p.base_url)+'</div></span>'
       + '</div>'
-      + '<select class="input-sm" title="Reasoning normalization" onchange="setReasoningMode(this.dataset.id,this.value)" data-id="'+escAttr(p.id)+'">'
-      +   '<option value="auto"'+(mode==='auto'?' selected':'')+'>reasoning: dual-emit</option>'
-      +   '<option value="passthrough"'+(mode==='passthrough'?' selected':'')+'>reasoning: passthrough</option>'
-      + '</select>'
       + '<button class="icon-btn" data-id="'+escAttr(p.id)+'" onclick="discoverProvider(this.dataset.id)" title="Fetch models served by this provider">Discover</button>'
       + '<button class="icon-btn" data-id="'+escAttr(p.id)+'" onclick="toggleEditProvider(this.dataset.id)">Edit</button>'
       + '<button class="icon-btn '+(enabled?'danger':'success')+'" data-id="'+escAttr(p.id)+'" onclick="toggleProviderEnabled(this.dataset.id)" title="'+(enabled?'Disable provider':'Enable provider')+'">'+(enabled?'Disable':'Enable')+'</button>'
@@ -216,13 +230,6 @@ async function toggleProviderEnabled(id) {
   p.enabled = p.enabled === false ? true : false;
   await saveCurrentConfig();
   toast('Provider '+(p.enabled?'enabled':'disabled'), 'info');
-}
-
-async function setReasoningMode(id, mode) {
-  const p = currentConfig.providers.find(x => x.id === id);
-  if (!p) return;
-  p.reasoning_mode = mode;
-  await saveCurrentConfig();
 }
 
 document.addEventListener('DOMContentLoaded', loadProvidersPage);

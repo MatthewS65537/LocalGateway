@@ -63,6 +63,44 @@
   </div>
 
   <div class="card">
+    <div class="card-head"><h2>Time-Based Routing</h2>
+      <div class="field-hint">Per-model: define time windows where only specific provider backends are active.</div>
+    </div>
+    <div class="stack">
+      <div class="settings-field">
+        <label class="field-label" for="tr-model-select">Model</label>
+        <select id="tr-model-select" class="input-narrow" onchange="loadTimeRouting()">
+          <option value="">Select a model…</option>
+        </select>
+      </div>
+      <div id="tr-editor" class="dimmed">
+        <div class="settings-field" style="margin-bottom:14px">
+          <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
+            <input type="checkbox" id="tr-enabled" onchange="toggleTimeRouting()">
+            Enable time-based routing for this model
+          </label>
+        </div>
+        <div id="tr-options">
+          <div class="settings-field">
+            <label class="field-label" for="tr-timezone">Timezone</label>
+            <input type="text" id="tr-timezone" value="UTC" class="input-narrow" placeholder="IANA timezone (e.g. America/New_York)">
+          </div>
+          <div id="tr-slots-wrap">
+            <div class="hstack" style="margin-bottom:10px">
+              <button class="secondary" onclick="showAddSlotModal()">+ Add Slot</button>
+            </div>
+            <div id="tr-slots" class="stack"></div>
+          </div>
+          <div class="hstack" style="margin-top:12px">
+            <button class="primary" onclick="saveTimeRoutingConfig()">Save</button>
+            <button class="secondary" onclick="loadTimeRouting()">Reset</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="card-head"><h2>Health Probes</h2></div>
     <div class="stack">
       <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">

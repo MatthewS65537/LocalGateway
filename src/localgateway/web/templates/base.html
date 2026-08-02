@@ -5,11 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}LocalGateway{% endblock %}</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script>(function(){var t=localStorage.getItem('lg-theme');if(!t){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';}document.documentElement.setAttribute('data-theme',t);})();</script>
-<link rel="stylesheet" href="/static/app.css?v=0.2.0">
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <div class="toast-container" id="toast-container"></div>
@@ -83,7 +80,7 @@
   </main>
 </div>
 
-<script src="/static/js/shared.js?v=0.2.0"></script>
+<script src="/static/js/shared.js"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

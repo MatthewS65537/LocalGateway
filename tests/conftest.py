@@ -147,6 +147,7 @@ def gateway_app(mock_servers, tmp_path):
     logs_mod._initialized = False
     stats_mod.reset()
     ratelimit._cooldowns.clear()
+    ratelimit._permanent.clear()
     _rr.clear()
 
     app = create_app(str(cfg_path))

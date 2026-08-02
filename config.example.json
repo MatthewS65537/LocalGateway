@@ -23,7 +23,6 @@
       "timeout": 120.0,
       "enabled": true,
       "stream_idle_timeout": 60.0,
-      "reasoning_mode": "auto",
       "avatar": ""
     }
   ],

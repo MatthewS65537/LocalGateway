@@ -9,7 +9,7 @@ function loadSettingsPage() {
 async function loadServerSettings() {
   try {
     const { data } = await fetchJSON('/admin/config');
-    const port = data.server?.port || 8080;
+    const port = data.server?.port || 3456;
     document.getElementById('settings-port').value = port;
     const keyInput = document.getElementById('settings-api-key');
     keyInput.value = data.server?.api_key || '';
@@ -46,15 +46,13 @@ async function saveServerSettings() {
   const port = parseInt(document.getElementById('settings-port').value, 10);
   if (!port || port < 1 || port > 65535) { toast('Port must be 1-65535', 'error'); return; }
   const apiKey = document.getElementById('settings-api-key').value.trim();
-  try {
-    const { data } = await fetchJSON('/admin/config');
+  const { ok } = await saveConfigSection(data => {
     data.server = data.server || {};
     data.server.port = port;
     data.server.api_key = apiKey || null;
-    const { ok } = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
-    if (ok) toast('Server settings saved. Restart required for port changes.', 'success');
-    else toast('Failed to save server settings', 'error');
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  });
+  if (ok) toast('Server settings saved. Restart required for port changes.', 'success');
+  else toast('Failed to save server settings', 'error');
 }
 
 async function loadRoutingSettings() {
@@ -96,15 +94,13 @@ function updateDecayViz() {
 async function saveRoutingSettings() {
   const mode = document.getElementById('settings-routing-mode').value;
   const decay = parseFloat(document.getElementById('settings-routing-decay').value) || 0.4;
-  try {
-    const { data } = await fetchJSON('/admin/config');
+  const { ok } = await saveConfigSection(data => {
     data.server = data.server || {};
     data.server.routing_mode = mode;
     data.server.routing_decay = decay;
-    const { ok } = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
-    if (ok) toast('Routing settings saved', 'success');
-    else toast('Failed to save routing settings', 'error');
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  });
+  if (ok) toast('Routing settings saved', 'success');
+  else toast('Failed to save routing settings', 'error');
 }
 
 async function loadProbeSettings() {
@@ -129,16 +125,14 @@ async function saveProbeSettings() {
   const enabled = document.getElementById('settings-probe-enabled').checked;
   const interval = parseInt(document.getElementById('settings-probe-interval').value, 10);
   const maxTokens = parseInt(document.getElementById('settings-probe-max-tokens').value, 10);
-  try {
-    const { data } = await fetchJSON('/admin/config');
+  const { ok } = await saveConfigSection(data => {
     data.server = data.server || {};
     data.server.probe_enabled = enabled;
     data.server.probe_interval_s = interval;
     data.server.probe_max_tokens = maxTokens;
-    const { ok } = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
-    if (ok) toast('Probe settings saved', 'success');
-    else toast('Failed to save probe settings', 'error');
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  });
+  if (ok) toast('Probe settings saved', 'success');
+  else toast('Failed to save probe settings', 'error');
 }
 
 async function loadDisplaySettings() {
@@ -150,14 +144,13 @@ async function loadDisplaySettings() {
 }
 
 async function saveDisplaySettings() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
+  const chartEnabled = document.getElementById('settings-chart-enabled').checked;
+  const { ok } = await saveConfigSection(data => {
     data.server = data.server || {};
-    data.server.chart_enabled = document.getElementById('settings-chart-enabled').checked;
-    const { ok } = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
-    if (ok) toast('Display settings saved', 'success');
-    else toast('Failed to save display settings', 'error');
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
+    data.server.chart_enabled = chartEnabled;
+  });
+  if (ok) toast('Display settings saved', 'success');
+  else toast('Failed to save display settings', 'error');
 }
 
 async function clearUsageData() {

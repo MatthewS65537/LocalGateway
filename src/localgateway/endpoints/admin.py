@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from ..config import load_config, save_config, GatewayConfig, reload_config
+from ..config import load_config, save_config, GatewayConfig, reload_config, TimeSlot, TimeRoutingConfig
 from ..ratelimit import ratelimit
 from ..usage import (
     log_request,
@@ -15,6 +15,7 @@ from ..usage import (
     get_model_aggregates,
     get_backend_percentiles,
     get_backend_series,
+    get_model_totals,
     rename_model,
     rename_provider,
     PERCENTILES,
@@ -24,21 +25,128 @@ from .. import stats
 
 router = APIRouter()
 
+# Sentinel written by GET /admin/config in place of real API keys. When a
+# full config is round-tripped back via PUT, a provider key equal to this
+# sentinel is treated as "unchanged" and the real stored key is preserved,
+# so the UI's read-modify-write flow never clobbers keys it never saw.
+REDACTED_KEY = "\u2022\u2022\u2022\u2022\u2022\u2022"
+
+MODEL_SETTABLE = {
+    "description": str,
+    "context_length": (int, type(None)),
+    "enabled": bool,
+    "capabilities": dict,
+    "modality": str,
+    "max_output_tokens": (int, type(None)),
+    "tags": list,
+    "aliases": list,
+    "default_params": dict,
+    "display_name": str,
+    "avatar": str,
+}
+
+BACKEND_SETTABLE = {
+    "provider": str,
+    "model": str,
+    "enabled": bool,
+    "context_length": (int, type(None)),
+    "max_output_tokens": (int, type(None)),
+}
+
+
+def _apply_fields(obj, body, whitelist):
+    """Apply a subset of body fields to obj with pydantic-typed validation.
+
+    Rejects unknown fields and type mismatches (422) instead of mutating the
+    in-memory model with a malformed value that would corrupt the next save.
+    """
+    allowed = set(whitelist)
+    unknown = set(body.keys()) - allowed
+    if unknown:
+        raise ValueError(f"unknown fields: {', '.join(sorted(unknown))}")
+    for field, types in whitelist.items():
+        if field not in body:
+            continue
+        value = body[field]
+        if not isinstance(types, tuple):
+            types = (types,)
+        if not isinstance(value, types):
+            raise ValueError(
+                f"field '{field}' must be {types[0].__name__ if len(types) == 1 else 'one of ' + ', '.join(t.__name__ for t in types)}"
+            )
+        setattr(obj, field, value)
+
 
 @router.get("/admin/config")
 async def get_config():
-    return JSONResponse(load_config().model_dump())
+    cfg = load_config()
+    dump = cfg.model_dump()
+    for p in dump.get("providers", []):
+        if p.get("api_key"):
+            p["api_key"] = REDACTED_KEY
+    return JSONResponse(dump)
+
+
+@router.post("/admin/config/api-key")
+async def set_provider_api_key(request: Request):
+    """Set or clear a provider API key without exposing it in GET /admin/config."""
+    body = await request.json()
+    provider_id = (body.get("provider") or "").strip()
+    if not provider_id:
+        return JSONResponse({"error": "provider is required"}, status_code=422)
+    cfg = load_config()
+    provider = cfg.provider_by_id(provider_id)
+    if provider is None:
+        return JSONResponse({"error": f"Provider '{provider_id}' not found"}, status_code=404)
+    value = body.get("api_key")
+    provider.api_key = value if value is not None else ""
+    save_config(cfg)
+    return JSONResponse({"status": "ok"})
+
+
+@router.get("/admin/config/api-key/{provider_id}")
+async def reveal_provider_api_key(provider_id: str):
+    """Return the real API key for one provider (admin-only)."""
+    cfg = load_config()
+    provider = cfg.provider_by_id(provider_id)
+    if provider is None:
+        return JSONResponse({"error": f"Provider '{provider_id}' not found"}, status_code=404)
+    return JSONResponse({"provider": provider_id, "api_key": provider.api_key})
 
 
 @router.put("/admin/config")
 async def put_config(request: Request):
     body = await request.json()
+    current = load_config()
+    # Optimistic concurrency: reject stale writes.
+    try:
+        incoming_version = body.get("version")
+    except AttributeError:
+        incoming_version = None
+    if incoming_version is not None and isinstance(body, dict) and current.version != incoming_version:
+        return JSONResponse(
+            {
+                "error": "config changed since load (conflict)",
+                "type": "version_conflict",
+                "current_version": current.version,
+            },
+            status_code=409,
+        )
     try:
         cfg = GatewayConfig.model_validate(body)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=422)
+    # Preserve real API keys that were redacted to the sentinel on GET. The UI
+    # round-trips the full config on save; without this it would clobber every
+    # provider key it never received.
+    for p in cfg.providers:
+        if p.api_key == REDACTED_KEY:
+            existing = current.provider_by_id(p.id)
+            if existing is not None:
+                p.api_key = existing.api_key
+    cfg.version = current.version  # normalize; save_config bumps
     save_config(cfg)
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "version": cfg.version})
 
 
 @router.post("/admin/config/reload")
@@ -113,6 +221,7 @@ async def model_stats(model_id: str, hours: int = 168, p: str = "p50"):
         return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
     pct = PERCENTILES.get(p, 0.5)
     statsp = get_backend_percentiles(model_id, hours=hours, p=pct)
+    totals = get_model_totals(model_id, hours=hours)
     backends = []
     for b in sorted(model.backends, key=lambda x: x.priority):
         provider = config.provider_by_id(b.provider)
@@ -147,6 +256,7 @@ async def model_stats(model_id: str, hours: int = 168, p: str = "p50"):
         "hours": hours,
         "percentile": p,
         "backends": backends,
+        "totals": totals,
     })
 
 
@@ -352,9 +462,15 @@ async def update_model(model_id: str, request: Request):
     if model is None:
         return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
     body = await request.json()
-    for field in ["description", "context_length", "enabled", "capabilities", "modality", "max_output_tokens", "tags", "aliases", "default_params", "display_name", "avatar"]:
-        if field in body:
-            setattr(model, field, body[field])
+    try:
+        # time_routing must be validated as a pydantic model (not set raw).
+        # Pop it so _apply_fields doesn't setattr the raw dict afterward.
+        tr_body = body.pop("time_routing", None)
+        if tr_body is not None:
+            model.time_routing = TimeRoutingConfig.model_validate(tr_body)
+        _apply_fields(model, body, MODEL_SETTABLE)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
     save_config(config)
     return JSONResponse({"status": "ok"})
 
@@ -447,9 +563,10 @@ async def update_backend(model_id: str, index: int, request: Request):
         return JSONResponse({"error": "Invalid backend index"}, status_code=400)
     body = await request.json()
     backend = model.backends[index]
-    for field in ["provider", "model", "enabled", "context_length", "max_output_tokens"]:
-        if field in body:
-            setattr(backend, field, body[field])
+    try:
+        _apply_fields(backend, body, BACKEND_SETTABLE)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
     save_config(config)
     return JSONResponse({"status": "ok"})
 
@@ -468,6 +585,98 @@ async def remove_backend(model_id: str, index: int):
         b.priority = i + 1
     save_config(config)
     return JSONResponse({"status": "ok"})
+
+
+@router.get("/admin/models/{model_id}/time-routing")
+async def get_time_routing(model_id: str):
+    """Return a model's time-based routing config."""
+    config = load_config()
+    model = config.model_by_id(model_id)
+    if model is None:
+        return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
+    return JSONResponse(model.time_routing.model_dump())
+
+
+@router.put("/admin/models/{model_id}/time-routing")
+async def put_time_routing(model_id: str, request: Request):
+    """Replace a model's entire time-based routing config."""
+    config = load_config()
+    model = config.model_by_id(model_id)
+    if model is None:
+        return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
+    body = await request.json()
+    try:
+        model.time_routing = TimeRoutingConfig.model_validate(body)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    save_config(config)
+    return JSONResponse(model.time_routing.model_dump())
+
+
+@router.post("/admin/models/{model_id}/time-slots")
+async def create_time_slot(model_id: str, request: Request):
+    """Create a time slot for a model. Generates ``id`` when blank."""
+    config = load_config()
+    model = config.model_by_id(model_id)
+    if model is None:
+        return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
+    body = await request.json()
+    try:
+        slot = TimeSlot.model_validate(body)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    if not slot.id:
+        slot.id = _slot_id(slot)
+    model.time_routing.slots.append(slot)
+    save_config(config)
+    return JSONResponse(slot.model_dump())
+
+
+@router.put("/admin/models/{model_id}/time-slots/{slot_id}")
+async def update_time_slot(model_id: str, slot_id: str, request: Request):
+    """Update a single time slot by id."""
+    config = load_config()
+    model = config.model_by_id(model_id)
+    if model is None:
+        return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
+    slot = next((s for s in model.time_routing.slots if s.id == slot_id), None)
+    if slot is None:
+        return JSONResponse({"error": f"Time slot '{slot_id}' not found"}, status_code=404)
+    body = await request.json()
+    try:
+        updated = TimeSlot.model_validate(body)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    if not updated.id:
+        updated.id = slot_id
+    idx = model.time_routing.slots.index(slot)
+    model.time_routing.slots[idx] = updated
+    save_config(config)
+    return JSONResponse(updated.model_dump())
+
+
+@router.delete("/admin/models/{model_id}/time-slots/{slot_id}")
+async def delete_time_slot(model_id: str, slot_id: str):
+    """Delete a time slot by id."""
+    config = load_config()
+    model = config.model_by_id(model_id)
+    if model is None:
+        return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
+    before = len(model.time_routing.slots)
+    model.time_routing.slots = [s for s in model.time_routing.slots if s.id != slot_id]
+    if len(model.time_routing.slots) == before:
+        return JSONResponse({"error": f"Time slot '{slot_id}' not found"}, status_code=404)
+    save_config(config)
+    return JSONResponse({"status": "ok"})
+
+
+def _slot_id(slot: TimeSlot) -> str:
+    """Deterministic slug from name + hours, e.g. 'peak-09-17'."""
+    import re
+    stem = re.sub(r"[^a-z0-9]+", "-", (slot.name or "").lower()).strip("-")
+    if not stem:
+        stem = "slot"
+    return f"{stem}-{slot.start_hour}-{slot.end_hour}"
 
 
 @router.get("/admin/health")
@@ -542,6 +751,13 @@ async def unsnooze_backend(request: Request):
     ratelimit.unsnooze(provider, model)
     ratelimit.save()
     return JSONResponse({"status": "ok"})
+
+
+@router.post("/admin/backends/unsnooze-all")
+async def unsnooze_all_backends():
+    """Remove every snooze/cooldown entry (manual + auto)."""
+    cleared = ratelimit.clear()
+    return JSONResponse({"status": "ok", "cleared": cleared})
 
 
 @router.post("/admin/rename")
@@ -789,7 +1005,7 @@ async def test_backend(request: Request):
             backend_model=model, success=True,
             input_tokens=in_tok, output_tokens=out_tok,
             cost=cost, latency_ms=latency_ms, ttft_ms=ttft_ms,
-            tps=tps, stream=stream,
+            tps=tps, stream=stream, is_probe=True,
         )
         stats.record_success(provider_id, model, latency_ms=latency_ms, ttft_ms=ttft_ms)
 

@@ -142,7 +142,6 @@ Each provider is an OpenAI-compatible endpoint.
 | `timeout` | `120.0` | Request timeout (seconds) |
 | `enabled` | `true` | Include in routing |
 | `stream_idle_timeout` | `60.0` | Idle timeout for SSE streams |
-| `reasoning_mode` | `auto` | `auto` (dual-emit reasoning) or `passthrough` |
 | `avatar` | `""` | Custom avatar text (empty = first letter of id) |
 
 ### `models[]`

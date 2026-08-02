@@ -97,7 +97,7 @@ function initSubnavScrollSpy() {
       this.classList.add('active');
     });
   });
-  const sections = ['providers', 'metadata', 'chart'].map(id => document.getElementById(id)).filter(Boolean);
+  const sections = ['providers', 'chart'].map(id => document.getElementById(id)).filter(Boolean);
   if (!sections.length) return;
   let scrollTimer = null;
   window.addEventListener('scroll', function() {
@@ -124,7 +124,7 @@ function stopInflightPolling() {
   if (_inflightTimer) { clearInterval(_inflightTimer); _inflightTimer = null; }
 }
 async function pollInflight() {
-  if (!modelDetailState.id) return;
+  if (!modelDetailState.id || document.hidden) return;
   try {
     const { data } = await fetchJSON('/admin/inflight');
     modelDetailState.inflight = data || {};
@@ -292,9 +292,9 @@ async function reloadModelDetail() {
     + '<span class="filter-hint">· '+((cfgModel.backends || []).filter(b=>b.enabled!==false).length)+' backends</span>';
   document.getElementById('detail-desc').textContent = cfgModel.description || '';
 
-  // Update metadata display
+  // Update metadata display (drawer)
   const setMeta = (field, value, elId) => {
-    const row = document.querySelector('.meta-row[data-field="' + field + '"]');
+    const row = document.querySelector('#metadata-drawer .meta-row[data-field="' + field + '"]');
     const el = document.getElementById(elId);
     if (!el) return;
     const hasValue = value && value !== '—' && value !== '';
@@ -313,6 +313,10 @@ async function reloadModelDetail() {
   const caps = cfgModel.capabilities || {};
   const enabledCaps = Object.entries(caps).filter(([k, v]) => v).map(([k]) => k).join(', ');
   setMeta('capabilities', enabledCaps, 'meta-capabilities');
+
+  // Drawer title
+  const drawerTitle = document.getElementById('drawer-model-title');
+  if (drawerTitle) drawerTitle.textContent = cfgModel.display_name || id;
 
   // ---- Stat strip ----
   const chartEnabled = currentConfig && currentConfig.server && currentConfig.server.chart_enabled !== false;
@@ -338,67 +342,134 @@ async function reloadModelDetail() {
     const ctxStr = computeContextRange(cfgModel, bs);
     const successVals = bs.map(b => b.success_rate).filter(v => v != null);
     const uptimeStr = successVals.length ? Math.min(...successVals).toFixed(1)+'%' : '—';
-    renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr);
+    const totals = statsR.data.totals || {};
+    const tokensStr = totals.tokens != null ? fmtTokens(totals.tokens) : '—';
+    const spendStr = totals.cost != null ? '$' + totals.cost.toFixed(4) : '—';
+    renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr, tokensStr, spendStr);
   } catch(e) {
     document.getElementById('detail-rows').innerHTML = '<tr><td colspan="14" class="empty">Gateway is stopped — start it to see live stats.</td></tr>';
     document.getElementById('detail-chart').innerHTML = '<div class="empty">No data.</div>';
-    renderDetailStatStrip(cfgModel, '—', '—', '—', '—');
+    renderDetailStatStrip(cfgModel, '—', '—', '—', '—', '—', '—');
   }
 }
 
-function renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr) {
-  const el = document.getElementById('detail-stat-strip');
-  if (!el) return;
-  const cells = [
-    { cap: 'Modality', num: cfgModel.modality || '—' },
-    { cap: 'In / Out', num: priceStr, sub: 'per 1M tokens' },
-    { cap: 'Context', num: ctxStr },
-    { cap: 'Best TPS P50', num: bestP50, accent: true, sub: 'tokens/sec' },
-    { cap: 'Uptime', num: uptimeStr },
-  ];
-  el.innerHTML = cells.map(c =>
+function renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr, tokensStr, spendStr) {
+  const bar1 = document.getElementById('detail-stat-strip');
+  const bar2 = document.getElementById('detail-stat-strip-2');
+  const cell = (cap, num, accent, sub) =>
     '<div class="detail-stat-cell">'
-    + '<div class="cap">'+c.cap+'</div>'
-    + '<div class="num'+(c.accent?' accent':'')+'">'+c.num+'</div>'
-    + (c.sub ? '<div class="sub">'+c.sub+'</div>' : '')
-    + '</div>'
-  ).join('');
+    + '<div class="cap">' + cap + '</div>'
+    + '<div class="num' + (accent ? ' accent' : '') + '">' + num + '</div>'
+    + (sub ? '<div class="sub">' + sub + '</div>' : '')
+    + '</div>';
+  if (bar1) bar1.innerHTML =
+    cell('Modality', cfgModel.modality || '—') +
+    cell('In / Out', priceStr, false, 'per 1M tokens') +
+    cell('Context', ctxStr);
+  if (bar2) bar2.innerHTML =
+    cell('24h Spend', spendStr, false, 'estimated') +
+    cell('24h Tokens', tokensStr, false, 'total') +
+    cell('Best TPS P50', bestP50, true, 'tokens/sec') +
+    cell('Uptime', uptimeStr);
 }
 
-function toggleMetadataEdit() {
-  const display = document.getElementById('metadata-display');
-  const edit = document.getElementById('metadata-edit');
-  const btn = document.getElementById('metadata-edit-btn');
-  const isHidden = edit.classList.contains('hidden');
-
-  if (isHidden) {
-    const id = modelDetailState.id;
-    const cfgModel = (currentConfig && currentConfig.models || []).find(m => m.id === id) || {};
-    document.getElementById('edit-display-name').value = cfgModel.display_name || '';
-    document.getElementById('edit-description').value = cfgModel.description || '';
-    document.getElementById('edit-modality').value = cfgModel.modality || '';
-    document.getElementById('edit-max-output').value = cfgModel.max_output_tokens || '';
-    document.getElementById('edit-tags').value = (cfgModel.tags || []).join(',');
-    document.getElementById('edit-aliases').value = (cfgModel.aliases || []).join(',');
-    document.getElementById('edit-default-params').value = Object.keys(cfgModel.default_params || {}).length
-      ? JSON.stringify(cfgModel.default_params, null, 2) : '';
-
-    const caps = cfgModel.capabilities || {};
-    ['text', 'vision', 'audio', 'tools', 'json_mode', 'parallel_tool_calls', 'streaming'].forEach(cap => {
-      document.getElementById('cap-' + cap).checked = caps[cap] || false;
-    });
-
-    display.classList.add('hidden');
-    edit.classList.remove('hidden');
-    btn.textContent = 'Cancel';
-  } else {
-    display.classList.remove('hidden');
-    edit.classList.add('hidden');
-    btn.textContent = 'Edit';
-  }
+// ---------- metadata drawer ----------
+function _setChevron(dir) {
+  const path = document.querySelector('#right-edge-toggle .chevron path');
+  if (path) path.setAttribute('d', dir === 'left' ? 'M10 6l6 6-6 6' : 'M14 6l-6 6 6 6');
+}
+function showMetadataDrawer() {
+  const drawer = document.getElementById('metadata-drawer');
+  const backdrop = document.getElementById('metadata-drawer-backdrop');
+  if (!drawer || !backdrop) return;
+  drawer.classList.remove('hidden');
+  backdrop.classList.remove('hidden');
+  document.body.classList.add('metadata-open');
+  _setChevron('left');
+  requestAnimationFrame(() => {
+    drawer.classList.add('open');
+    backdrop.classList.add('visible');
+  });
+  document.addEventListener('keydown', _drawerEscHandler);
+}
+function hideMetadataDrawer() {
+  const drawer = document.getElementById('metadata-drawer');
+  const backdrop = document.getElementById('metadata-drawer-backdrop');
+  if (!drawer) return;
+  drawer.classList.remove('open');
+  backdrop.classList.remove('visible');
+  document.body.classList.remove('metadata-open');
+  _setChevron('right');
+  setTimeout(() => { drawer.classList.add('hidden'); backdrop.classList.add('hidden'); }, 220);
+  document.removeEventListener('keydown', _drawerEscHandler);
+}
+function _drawerEscHandler(e) { if (e.key === 'Escape') hideMetadataDrawer(); }
+function toggleMetadataDrawer() {
+  if (document.getElementById('metadata-drawer')?.classList.contains('open')) hideMetadataDrawer();
+  else showMetadataDrawer();
 }
 
-async function saveModelMetadata() {
+function editModelMetadata() {
+  const id = modelDetailState.id;
+  if (!id) return;
+  const cfgModel = (currentConfig && currentConfig.models || []).find(m => m.id === id) || {};
+  const caps = cfgModel.capabilities || {};
+  const capItem = (key, label) =>
+    '<label class="cap-item"><input type="checkbox" id="cap-' + key + '" ' + (caps[key] ? 'checked' : '') + '> ' + label + '</label>';
+
+  const bodyHtml =
+    '<div class="field-group">' +
+      '<div class="field"><label class="field-label" for="edit-display-name">Display Name</label>' +
+        '<input type="text" id="edit-display-name" value="' + esc(cfgModel.display_name || '') + '"></div>' +
+      '<div class="field"><label class="field-label" for="edit-slug">Model Slug</label>' +
+        '<input type="text" id="edit-slug" class="mono" value="' + esc(id) + '">' +
+        '<div class="field-hint">Changing the slug migrates all usage data to the new ID.</div></div>' +
+      '<div class="field"><label class="field-label" for="edit-description">Description</label>' +
+        '<input type="text" id="edit-description" value="' + esc(cfgModel.description || '') + '" placeholder="Optional description"></div>' +
+      '<div class="field"><label class="field-label" for="edit-modality">Modality</label>' +
+        '<select id="edit-modality">' +
+          '<option value=""' + (!cfgModel.modality ? ' selected' : '') + '>None</option>' +
+          '<option value="text"' + (cfgModel.modality === 'text' ? ' selected' : '') + '>Text</option>' +
+          '<option value="text+vision"' + (cfgModel.modality === 'text+vision' ? ' selected' : '') + '>Text + Vision</option>' +
+          '<option value="multimodal"' + (cfgModel.modality === 'multimodal' ? ' selected' : '') + '>Multimodal</option>' +
+        '</select></div>' +
+      '<div class="field"><label class="field-label" for="edit-max-output">Max Output Tokens</label>' +
+        '<input type="number" id="edit-max-output" value="' + (cfgModel.max_output_tokens || '') + '"></div>' +
+      '<div class="field"><label class="field-label" for="edit-tags">Tags (comma-separated)</label>' +
+        '<input type="text" id="edit-tags" value="' + esc((cfgModel.tags || []).join(',')) + '" placeholder="fast,cheap,smart"></div>' +
+      '<div class="field"><label class="field-label" for="edit-aliases">Aliases (comma-separated)</label>' +
+        '<input type="text" id="edit-aliases" value="' + esc((cfgModel.aliases || []).join(',')) + '" placeholder="gpt-4,gpt4"></div>' +
+      '<div class="field"><label class="field-label" for="edit-default-params">Default Params (JSON)</label>' +
+        '<textarea id="edit-default-params" rows="3" placeholder=\'{"temperature":0.7,"max_tokens":2048}\' style="font-family:var(--font-mono);font-size:0.82rem">' +
+        esc(Object.keys(cfgModel.default_params || {}).length ? JSON.stringify(cfgModel.default_params, null, 2) : '') +
+        '</textarea></div>' +
+      '<div class="field"><label class="field-label">Capabilities</label>' +
+        '<div class="cap-grid">' +
+          capItem('text', 'Text') +
+          capItem('vision', 'Vision') +
+          capItem('audio', 'Audio') +
+          capItem('tools', 'Tools') +
+          capItem('json_mode', 'JSON Mode') +
+          capItem('parallel_tool_calls', 'Parallel Tools') +
+          capItem('streaming', 'Streaming') +
+        '</div></div>' +
+    '</div>' +
+    '<div class="modal-actions">' +
+      '<button class="secondary" data-cancel>Cancel</button>' +
+      '<button class="primary" data-ok>Save</button></div>';
+
+  const overlay = openModal({
+    title: 'Edit Metadata — ' + id,
+    widthClass: 'modal-lg',
+    bodyHtml,
+    onMount: (ov) => {
+      ov.querySelector('[data-cancel]').onclick = () => closeModal(ov);
+      ov.querySelector('[data-ok]').onclick = () => saveModelMetadata(ov);
+    },
+  });
+}
+
+async function saveModelMetadata(overlay) {
   const id = modelDetailState.id;
   if (!id) return;
 
@@ -429,6 +500,7 @@ async function saveModelMetadata() {
   }
 
   const maxOutput = document.getElementById('edit-max-output').value;
+  const newSlug = document.getElementById('edit-slug').value.trim();
 
   const body = {
     display_name: document.getElementById('edit-display-name').value,
@@ -442,67 +514,40 @@ async function saveModelMetadata() {
   };
 
   try {
-    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(body) });
+    let targetId = id;
+
+    // Handle slug rename if changed
+    if (newSlug && newSlug !== id) {
+      const r = await fetch('/admin/rename', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ type: 'model', old_id: id, new_id: newSlug }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ error: 'Failed to rename slug' }));
+        toast(err.error || 'Failed to rename slug', 'error');
+        return;
+      }
+      targetId = newSlug;
+    }
+
+    // Save metadata fields
+    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(targetId), { method: 'PUT', body: JSON.stringify(body) });
     if (ok) {
       toast('Model metadata updated', 'success');
-      toggleMetadataEdit();
+      if (overlay) closeModal(overlay);
       currentConfig = (await fetchJSON('/admin/config')).data;
-      await reloadModelDetail();
+      if (targetId !== id) {
+        location.href = '/models/' + encodeURIComponent(targetId);
+      } else {
+        await reloadModelDetail();
+      }
     } else {
       toast('Failed to update metadata', 'error');
     }
   } catch(e) {
     toast('Error: ' + e.message, 'error');
   }
-}
-
-// ---------- slug edit ----------
-function editModelSlug() {
-  const oldId = modelDetailState.id;
-  if (!oldId) return;
-  const overlay = openModal({
-    title: 'Edit Model Slug',
-    bodyHtml:
-      '<p class="modal-sub">Changing the slug will update the model ID and migrate all existing usage data to the new ID.</p>' +
-      '<input type="text" id="slug-input" class="mono" value="'+esc(oldId)+'">' +
-      '<div class="modal-actions">' +
-        '<button class="secondary" data-cancel>Cancel</button>' +
-        '<button class="primary" data-ok>Save</button></div>',
-    onMount: (ov) => {
-      const input = ov.querySelector('#slug-input');
-      input.focus(); input.select();
-      ov.querySelector('[data-cancel]').onclick = () => closeModal(ov);
-      ov.querySelector('[data-ok]').onclick = () => saveModelSlug(oldId, ov);
-    },
-  });
-}
-
-async function saveModelSlug(oldId, overlay) {
-  const newId = document.getElementById('slug-input').value.trim();
-  if (!newId || newId === oldId) { if (overlay) closeModal(overlay); return; }
-  const okBtn = overlay && overlay.querySelector('[data-ok]');
-  if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'Saving…'; }
-  try {
-    const r = await fetch('/admin/rename', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ type: 'model', old_id: oldId, new_id: newId }),
-    });
-    const res = r.ok ? await r.json() : null;
-    if (r.ok) {
-      const msg = res && res.usage_rows_updated
-        ? 'Slug updated (' + res.usage_rows_updated + ' usage rows migrated)'
-        : 'Slug updated';
-      toast(msg, 'success');
-      if (overlay) closeModal(overlay);
-      location.href = '/models/' + encodeURIComponent(newId);
-    } else {
-      const err = res && res.error ? res.error : 'Failed to update slug';
-      toast(err, 'error');
-    }
-  } catch(e) {
-    toast('Error: ' + e.message, 'error');
-  }
-  if (okBtn) { okBtn.disabled = false; okBtn.textContent = 'Save'; }
 }
 
 // ---------- model avatar editor ----------

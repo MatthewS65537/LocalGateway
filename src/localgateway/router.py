@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import random
 import threading
 from dataclasses import dataclass
@@ -112,6 +113,7 @@ def select_backends(
     prefs: ProviderPrefs | None = None,
     rng: random.Random | None = None,
     cache_key: str | None = None,
+    now: _dt.datetime | None = None,
 ) -> Iterator[SelectedBackend]:
     """Yield backends in fallback order.
 
@@ -147,6 +149,19 @@ def select_backends(
     max_inflight = getattr(config.server, "max_inflight_before_spill", None)
     affinity_active = cache_affinity and bool(cache_key)
 
+    # ---- time-based routing filter (per-model, OFF by default) ----
+    time_routing = getattr(model, "time_routing", None)
+    active_slot = None
+    if (
+        time_routing is not None
+        and time_routing.enabled
+        and time_routing.slots
+    ):
+        from .time_routing import get_active_slot
+        active_slot = get_active_slot(
+            time_routing.slots, time_routing.timezone, now=now
+        )
+
     tiers: dict[int, list[tuple[ProviderConfig, BackendConfig]]] = {}
     for b in model.backends:
         if not b.enabled:
@@ -160,6 +175,10 @@ def select_backends(
             continue
         if input_tokens is not None and b.context_length is not None and b.context_length < input_tokens:
             continue
+        if active_slot is not None:
+            from .time_routing import filter_backends_for_slot
+            if not filter_backends_for_slot([(b.provider, b.model)], active_slot):
+                continue
         tiers.setdefault(b.priority, []).append((provider, b))
 
     if not tiers:

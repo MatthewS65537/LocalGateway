@@ -46,7 +46,7 @@ function setupLogTimer() {
   if (logTimer) { clearInterval(logTimer); logTimer = null; }
   const on = document.getElementById('log-autorefresh').checked;
   if (on) logTimer = setInterval(() => {
-    if (document.getElementById('log-list')) loadLogs();
+    if (!document.hidden && document.getElementById('log-list')) loadLogs();
   }, 3000);
 }
 async function clearLogs() {

@@ -263,6 +263,38 @@ async def test_admin_health(client):
     assert b and b[0]["priority"] == 1
 
 
+async def test_admin_snooze_unsnooze_all(client):
+    r = await client.post("/admin/backends/snooze", json={
+        "provider": "mock1", "model": "mock-plain", "permanent": True,
+    })
+    assert r.status_code == 200 and r.json()["remaining"] == -1
+    r = await client.get("/admin/rate-limits")
+    snap = r.json()
+    assert snap.get("mock1:mock-plain") == -1
+
+    r = await client.post("/admin/backends/unsnooze", json={
+        "provider": "mock1", "model": "mock-plain",
+    })
+    assert r.status_code == 200
+    snap = (await client.get("/admin/rate-limits")).json()
+    assert "mock1:mock-plain" not in snap
+
+    await client.post("/admin/backends/snooze", json={
+        "provider": "mock1", "model": "mock-plain", "permanent": True,
+    })
+    r = await client.post("/admin/backends/unsnooze-all")
+    assert r.status_code == 200 and r.json()["cleared"] >= 1
+    snap = (await client.get("/admin/rate-limits")).json()
+    assert "mock1:mock-plain" not in snap
+
+
+async def test_admin_unsnooze_orphaned_key(client):
+    r = await client.post("/admin/backends/unsnooze", json={
+        "provider": "ghost-provider", "model": "ghost-model",
+    })
+    assert r.status_code == 200
+
+
 async def test_alias_and_provider_headers(client, db_rows):
     r = await client.post("/v1/chat/completions", json={
         "model": "reasoner-alias", "messages": [{"role": "user", "content": "hi"}],

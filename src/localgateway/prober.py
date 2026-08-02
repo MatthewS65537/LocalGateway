@@ -115,6 +115,7 @@ async def _prober_loop(client, interval_s: float, max_tokens: int) -> None:
                                 error=result.get("error"),
                                 latency_ms=result.get("latency_ms"),
                                 stream=True,
+                                is_probe=True,
                             )
                             stats.record_failure(prov.id, backend_model, result.get("error"))
                             logs.warn(
@@ -171,6 +172,7 @@ async def _prober_loop(client, interval_s: float, max_tokens: int) -> None:
                             ttft_ms=ttft,
                             tps=tps,
                             stream=True,
+                            is_probe=True,
                         )
                         stats.record_success(prov.id, backend_model, latency_ms=latency, ttft_ms=ttft)
                         await asyncio.sleep(1)

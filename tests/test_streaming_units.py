@@ -70,7 +70,10 @@ def test_resolve_alias():
     by_id, err1, s1 = _resolve_backends(cfg, "m", None)
     by_alias, err2, s2 = _resolve_backends(cfg, "m-alias", None)
     assert err1 is None and err2 is None
-    assert [b.provider.id for b in by_id] == [b.provider.id for b in by_alias]
+    # Same backends regardless of route; round-robin rotation may change order
+    # between the two calls, so compare as sorted multisets.
+    assert sorted(b.provider.id for b in by_id) == sorted(b.provider.id for b in by_alias)
+    assert set(b.backend.model for b in by_id) == set(b.backend.model for b in by_alias)
 
 
 def test_resolve_disabled_alias_404():

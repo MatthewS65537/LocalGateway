@@ -10,8 +10,8 @@ from localgateway.reasoning import (
 from localgateway.sse import SSEParser
 
 
-def _provider(mode="auto"):
-    return ProviderConfig(id="p", base_url="http://x", reasoning_mode=mode)
+def _provider():
+    return ProviderConfig(id="p", base_url="http://x")
 
 
 def test_dual_emit_reasoning_content_to_reasoning():
@@ -48,11 +48,6 @@ def test_response_body_normalized():
     assert out["choices"][0]["message"]["reasoning"] == "think"
 
 
-def test_response_body_passthrough_mode():
-    body = json.dumps({"choices": [{"message": {"reasoning_content": "t"}}]}).encode()
-    assert normalize_response_body(_provider("passthrough"), body) == body
-
-
 def test_response_body_without_reasoning_byte_identical():
     body = b'{"choices":[{"message":{"content":"hi"}}]}'
     assert normalize_response_body(_provider(), body) == body
@@ -73,12 +68,6 @@ def test_stream_transform_dual_emits_and_buffers():
     assert ev2["choices"][0]["delta"]["content"] == "hi"
     assert "reasoning" not in ev2["choices"][0]["delta"]
     assert flush_stream_chunk(_provider(), parser) == b""
-
-
-def test_stream_transform_passthrough_raw():
-    parser = SSEParser()
-    raw = b'data: {"choices":[{"delta":{"reasoning_content":"x"}}]}\n\n'
-    assert transform_stream_chunk(_provider("passthrough"), raw, parser) == raw
 
 
 def test_stream_flush_renders_trailing_event():

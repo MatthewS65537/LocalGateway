@@ -304,14 +304,16 @@ async def handle_request(
     errors: list[str] = []
     for selected in backends:
         stats.start_request(selected.provider.id, selected.backend.model)
-        result = await call_provider(
-            client,
-            selected.provider,
-            selected.backend.model,
-            upstream_body,
-            stream=False,
-        )
-        stats.end_request(selected.provider.id, selected.backend.model)
+        try:
+            result = await call_provider(
+                client,
+                selected.provider,
+                selected.backend.model,
+                upstream_body,
+                stream=False,
+            )
+        finally:
+            stats.end_request(selected.provider.id, selected.backend.model)
 
         if result.success:
             stats.record_success(
@@ -492,84 +494,115 @@ async def handle_request_stream(
         stats.start_request(selected.provider.id, selected.backend.model)
         pricing = config.pricing_for(selected.provider.id, selected.backend.model)
 
-        async for event in call_provider_stream(
-            client,
-            selected.provider,
-            selected.backend.model,
-            upstream_body,
-        ):
-            if isinstance(event, StreamDone):
-                stats.record_success(
-                    selected.provider.id,
-                    selected.backend.model,
-                    latency_ms=event.latency_ms,
-                    ttft_ms=event.ttft_ms,
-                )
-                usage = event.usage
-                stats.record_cache_activity(
-                    selected.provider.id,
-                    selected.backend.model,
-                    cache_key,
-                    usage.cached_tokens,
-                    usage.cache_write_tokens,
-                    usage.input_tokens,
-                    getattr(selected.backend, "cache_supported", None),
-                )
-                cost = _compute_cost(
-                    config,
-                    selected.provider.id,
-                    selected.backend.model,
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cached_tokens,
-                    usage.cache_write_tokens,
-                )
-                log_input = usage.input_tokens
-                log_cached = usage.cached_tokens
-                if pricing.cache_read is None and usage.input_tokens:
-                    log_cached = (usage.cached_tokens or 0) + usage.input_tokens
-                    log_input = 0
-                log_request(
-                    logical_model=logical_model,
-                    provider=selected.provider.id,
-                    backend_model=selected.backend.model,
-                    success=True,
-                    input_tokens=log_input,
-                    output_tokens=usage.output_tokens,
-                    reasoning_tokens=usage.reasoning_tokens,
-                    cached_tokens=log_cached,
-                    cache_write_tokens=usage.cache_write_tokens,
-                    cost=cost,
-                    latency_ms=event.latency_ms,
-                    ttft_ms=event.ttft_ms,
-                    tps=compute_tps(usage.output_tokens, event.latency_ms, event.ttft_ms),
-                    stream=True,
-                )
-                logs.info(
-                    "stream ok",
-                    model=logical_model,
-                    provider=selected.provider.id,
-                    status_code=200,
-                    latency_ms=event.latency_ms,
-                    ttft_ms=event.ttft_ms,
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    reasoning_tokens=usage.reasoning_tokens,
-                )
-                tail = _flush_transform(selected.provider, transform_parser)
-                if tail:
-                    yield tail
-                if not event.sent_done:
-                    yield b"data: [DONE]\n\n"
-                stats.end_request(selected.provider.id, selected.backend.model)
-                return
-
-            if isinstance(event, StreamFailed):
-                latency_ms = int((time.monotonic() - t0) * 1000)
-                if not event.mid_stream:
-                    errors.append(
-                        f"[{selected.provider.id}:{selected.backend.model}] {event.error}"
+        try:
+            async for event in call_provider_stream(
+                client,
+                selected.provider,
+                selected.backend.model,
+                upstream_body,
+            ):
+                if isinstance(event, StreamDone):
+                    stats.record_success(
+                        selected.provider.id,
+                        selected.backend.model,
+                        latency_ms=event.latency_ms,
+                        ttft_ms=event.ttft_ms,
                     )
+                    usage = event.usage
+                    stats.record_cache_activity(
+                        selected.provider.id,
+                        selected.backend.model,
+                        cache_key,
+                        usage.cached_tokens,
+                        usage.cache_write_tokens,
+                        usage.input_tokens,
+                        getattr(selected.backend, "cache_supported", None),
+                    )
+                    cost = _compute_cost(
+                        config,
+                        selected.provider.id,
+                        selected.backend.model,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cached_tokens,
+                        usage.cache_write_tokens,
+                    )
+                    log_input = usage.input_tokens
+                    log_cached = usage.cached_tokens
+                    if pricing.cache_read is None and usage.input_tokens:
+                        log_cached = (usage.cached_tokens or 0) + usage.input_tokens
+                        log_input = 0
+                    log_request(
+                        logical_model=logical_model,
+                        provider=selected.provider.id,
+                        backend_model=selected.backend.model,
+                        success=True,
+                        input_tokens=log_input,
+                        output_tokens=usage.output_tokens,
+                        reasoning_tokens=usage.reasoning_tokens,
+                        cached_tokens=log_cached,
+                        cache_write_tokens=usage.cache_write_tokens,
+                        cost=cost,
+                        latency_ms=event.latency_ms,
+                        ttft_ms=event.ttft_ms,
+                        tps=compute_tps(usage.output_tokens, event.latency_ms, event.ttft_ms),
+                        stream=True,
+                    )
+                    logs.info(
+                        "stream ok",
+                        model=logical_model,
+                        provider=selected.provider.id,
+                        status_code=200,
+                        latency_ms=event.latency_ms,
+                        ttft_ms=event.ttft_ms,
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        reasoning_tokens=usage.reasoning_tokens,
+                    )
+                    tail = _flush_transform(selected.provider, transform_parser)
+                    if tail:
+                        yield tail
+                    if not event.sent_done:
+                        yield b"data: [DONE]\n\n"
+                    return
+
+                if isinstance(event, StreamFailed):
+                    latency_ms = int((time.monotonic() - t0) * 1000)
+                    if not event.mid_stream:
+                        errors.append(
+                            f"[{selected.provider.id}:{selected.backend.model}] {event.error}"
+                        )
+                        stats.record_failure(selected.provider.id, selected.backend.model, event.error)
+                        log_request(
+                            logical_model=logical_model,
+                            provider=selected.provider.id,
+                            backend_model=selected.backend.model,
+                            success=False,
+                            error=event.error,
+                            latency_ms=latency_ms,
+                            stream=True,
+                        )
+                        if not event.retryable:
+                            logs.error(
+                                f"stream failed (non-retryable): {event.error}",
+                                model=logical_model,
+                                provider=selected.provider.id,
+                                status_code=event.status_code,
+                                latency_ms=latency_ms,
+                            )
+                            yield _error_sse(event.error, f"http_{event.status_code}")
+                            yield b"data: [DONE]\n\n"
+                            return
+                        logs.warn(
+                            f"stream backend failed, falling back: {event.error}",
+                            model=logical_model,
+                            provider=selected.provider.id,
+                            status_code=event.status_code,
+                            latency_ms=latency_ms,
+                        )
+                        break  # try next backend
+
+                    # Mid-stream failure: cannot fall back. Surface the error.
                     stats.record_failure(selected.provider.id, selected.backend.model, event.error)
                     log_request(
                         logical_model=logical_model,
@@ -578,62 +611,30 @@ async def handle_request_stream(
                         success=False,
                         error=event.error,
                         latency_ms=latency_ms,
+                        ttft_ms=ttft_ms,
                         stream=True,
                     )
-                    if not event.retryable:
-                        logs.error(
-                            f"stream failed (non-retryable): {event.error}",
-                            model=logical_model,
-                            provider=selected.provider.id,
-                            status_code=event.status_code,
-                            latency_ms=latency_ms,
-                        )
-                        yield _error_sse(event.error, f"http_{event.status_code}")
-                        yield b"data: [DONE]\n\n"
-                        stats.end_request(selected.provider.id, selected.backend.model)
-                        return
-                    logs.warn(
-                        f"stream backend failed, falling back: {event.error}",
+                    logs.error(
+                        f"stream failed mid-stream: {event.error}",
                         model=logical_model,
                         provider=selected.provider.id,
-                        status_code=event.status_code,
                         latency_ms=latency_ms,
                     )
-                    stats.end_request(selected.provider.id, selected.backend.model)
-                    break  # try next backend
+                    yield _error_sse(event.error, "stream_interrupted")
+                    yield b"data: [DONE]\n\n"
+                    return
 
-                # Mid-stream failure: cannot fall back. Surface the error.
-                stats.record_failure(selected.provider.id, selected.backend.model, event.error)
-                log_request(
-                    logical_model=logical_model,
-                    provider=selected.provider.id,
-                    backend_model=selected.backend.model,
-                    success=False,
-                    error=event.error,
-                    latency_ms=latency_ms,
-                    ttft_ms=ttft_ms,
-                    stream=True,
-                )
-                logs.error(
-                    f"stream failed mid-stream: {event.error}",
-                    model=logical_model,
-                    provider=selected.provider.id,
-                    latency_ms=latency_ms,
-                )
-                yield _error_sse(event.error, "stream_interrupted")
-                yield b"data: [DONE]\n\n"
-                stats.end_request(selected.provider.id, selected.backend.model)
-                return
-
-            # StreamChunk
-            if not first_yielded:
-                first_yielded = True
-                ttft_ms = int((time.monotonic() - t0) * 1000)
-            out = _transform_chunk(config, selected.provider, event.data, transform_parser)
-            if out:
-                if pricing.cache_read is None:
-                    out = _shift_stream_usage_to_cached(out)
-                yield out
+                # StreamChunk
+                if not first_yielded:
+                    first_yielded = True
+                    ttft_ms = int((time.monotonic() - t0) * 1000)
+                out = _transform_chunk(config, selected.provider, event.data, transform_parser)
+                if out:
+                    if pricing.cache_read is None:
+                        out = _shift_stream_usage_to_cached(out)
+                    yield out
+        finally:
+            stats.end_request(selected.provider.id, selected.backend.model)
 
     # All backends failed before first chunk
     logs.error(

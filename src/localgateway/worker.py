@@ -11,6 +11,7 @@ from .config import load_config, set_config_path
 from .usage import set_db_path
 from . import logs
 from . import prober
+from . import usage
 from .endpoints import chat_router, models_router, admin_router, web_router
 
 
@@ -54,6 +55,11 @@ def create_app(config_path: str = "config.json") -> FastAPI:
     @app.on_event("startup")
     async def startup():
         logs.info("Gateway worker started", provider="worker")
+        cfg = load_config()
+        usage.enforce_retention(
+            cfg.server.usage_retention_days,
+            cfg.server.log_retention_lines,
+        )
         prober.start_prober(app.state.http_client)
 
     @app.on_event("shutdown")
@@ -76,7 +82,7 @@ def main():
     parser = argparse.ArgumentParser(description="LocalGateway worker (internal)")
     parser.add_argument("--config", "-c", default="config.json")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", "-p", type=int, default=8080)
+    parser.add_argument("--port", "-p", type=int, default=3456)
     args = parser.parse_args()
     run_worker(args.config, args.host, args.port)
 

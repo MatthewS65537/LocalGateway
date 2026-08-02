@@ -19,6 +19,10 @@ def _connect() -> sqlite3.Connection:
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_db_path), timeout=10)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.Error:
+        pass
     return conn
 
 
@@ -59,6 +63,8 @@ def _init() -> None:
                 conn.execute("ALTER TABLE usage ADD COLUMN cached_tokens INTEGER")
             if "cache_write_tokens" not in existing:
                 conn.execute("ALTER TABLE usage ADD COLUMN cache_write_tokens INTEGER")
+            if "is_probe" not in existing:
+                conn.execute("ALTER TABLE usage ADD COLUMN is_probe INTEGER DEFAULT 0")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)"
             )
@@ -85,6 +91,7 @@ def log_request(
     ttft_ms: int | None = None,
     tps: float | None = None,
     stream: bool = False,
+    is_probe: bool = False,
 ) -> None:
     _init()
     with _db_lock:
@@ -93,8 +100,8 @@ def log_request(
                 """
                 INSERT INTO usage
                   (ts, logical_model, provider, backend_model, success, error,
-                   input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_write_tokens, cost, latency_ms, ttft_ms, tps, stream)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_write_tokens, cost, latency_ms, ttft_ms, tps, stream, is_probe)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     time.time(),
@@ -113,6 +120,7 @@ def log_request(
                     ttft_ms,
                     tps,
                     1 if stream else 0,
+                    1 if is_probe else 0,
                 ),
             )
 
@@ -129,6 +137,11 @@ _AGG_COLS = """
                   AVG(CASE WHEN success = 1 AND latency_ms IS NOT NULL THEN latency_ms END) as avg_latency_ms,
                   SUM(cost) as cost
 """
+
+
+# Exclude probe requests (is_probe=1) from all user-facing usage aggregates so
+# background health probes don't distort token counts, cost, or TPS percentiles.
+PROBE_EXCLUDE = " AND COALESCE(is_probe, 0) = 0 "
 
 
 def _row(r):
@@ -152,22 +165,22 @@ def get_usage_summary(hours: int = 24) -> dict:
     with _db_lock:
         with _connect() as conn:
             total = conn.execute(
-                f"SELECT {_AGG_COLS} FROM usage WHERE ts >= ?", (cutoff,)
+                f"SELECT {_AGG_COLS} FROM usage WHERE ts >= ?{PROBE_EXCLUDE}", (cutoff,)
             ).fetchone()
 
             by_provider = conn.execute(
-                f"SELECT provider, {_AGG_COLS} FROM usage WHERE ts >= ? GROUP BY provider",
+                f"SELECT provider, {_AGG_COLS} FROM usage WHERE ts >= ?{PROBE_EXCLUDE} GROUP BY provider",
                 (cutoff,),
             ).fetchall()
 
             by_model = conn.execute(
-                f"SELECT logical_model, {_AGG_COLS} FROM usage WHERE ts >= ? GROUP BY logical_model",
+                f"SELECT logical_model, {_AGG_COLS} FROM usage WHERE ts >= ?{PROBE_EXCLUDE} GROUP BY logical_model",
                 (cutoff,),
             ).fetchall()
 
             by_backend = conn.execute(
                 f"""SELECT provider || ':' || backend_model as backend, {_AGG_COLS}
-                    FROM usage WHERE ts >= ? GROUP BY backend ORDER BY requests DESC""",
+                    FROM usage WHERE ts >= ?{PROBE_EXCLUDE} GROUP BY backend ORDER BY requests DESC""",
                 (cutoff,),
             ).fetchall()
 
@@ -202,19 +215,19 @@ def get_model_aggregates(hours: int = 168) -> dict[str, dict]:
     with _db_lock:
         with _connect() as conn:
             agg = conn.execute(
-                """
+                f"""
                 SELECT logical_model,
                        COUNT(*) as requests,
                        SUM(success) as successes,
                        SUM(input_tokens) as input_tokens,
                        SUM(output_tokens) as output_tokens,
                        SUM(cost) as cost
-                FROM usage WHERE ts >= ? GROUP BY logical_model
+                FROM usage WHERE ts >= ?{PROBE_EXCLUDE} GROUP BY logical_model
                 """,
                 (cutoff,),
             ).fetchall()
             tps_rows = conn.execute(
-                "SELECT logical_model, tps FROM usage WHERE ts >= ? AND success = 1 AND tps IS NOT NULL",
+                f"SELECT logical_model, tps FROM usage WHERE ts >= ?{PROBE_EXCLUDE} AND success = 1 AND tps IS NOT NULL",
                 (cutoff,),
             ).fetchall()
 
@@ -244,19 +257,19 @@ def get_backend_percentiles(model_id: str, hours: int = 168, p: float = 0.5) -> 
     with _db_lock:
         with _connect() as conn:
             counts = conn.execute(
-                """
+                f"""
                 SELECT provider || ':' || backend_model as backend,
                        COUNT(*) as requests, SUM(success) as successes
-                FROM usage WHERE ts >= ? AND logical_model = ?
+                FROM usage WHERE ts >= ?{PROBE_EXCLUDE} AND logical_model = ?
                 GROUP BY backend
                 """,
                 (cutoff, model_id),
             ).fetchall()
             rows = conn.execute(
-                """
+                f"""
                 SELECT provider || ':' || backend_model as backend, ttft_ms, tps, latency_ms
                 FROM usage
-                WHERE ts >= ? AND logical_model = ? AND success = 1
+                WHERE ts >= ?{PROBE_EXCLUDE} AND logical_model = ? AND success = 1
                 """,
                 (cutoff, model_id),
             ).fetchall()
@@ -289,6 +302,35 @@ def get_backend_percentiles(model_id: str, hours: int = 168, p: float = 0.5) -> 
     return out
 
 
+def get_model_totals(model_id: str, hours: int = 168) -> dict:
+    """Aggregate token/cost totals for one logical model over a window."""
+    _init()
+    cutoff = time.time() - hours * 3600
+    with _db_lock:
+        with _connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) as requests,
+                       SUM(success) as successes,
+                       SUM(input_tokens) as input_tokens,
+                       SUM(output_tokens) as output_tokens,
+                       SUM(cost) as cost
+                FROM usage
+                WHERE ts >= ?{PROBE_EXCLUDE} AND logical_model = ?
+                """,
+                (cutoff, model_id),
+            ).fetchone()
+    req = row["requests"] or 0
+    return {
+        "requests": req,
+        "success_rate": round((row["successes"] or 0) / req * 100, 2) if req else None,
+        "input_tokens": row["input_tokens"] or 0,
+        "output_tokens": row["output_tokens"] or 0,
+        "tokens": (row["input_tokens"] or 0) + (row["output_tokens"] or 0),
+        "cost": row["cost"] or 0.0,
+    }
+
+
 def get_backend_series(model_id: str, hours: int = 168) -> dict:
     """Hourly-bucketed avg TPS/TTFT per backend, for charts."""
     _init()
@@ -302,7 +344,7 @@ def get_backend_series(model_id: str, hours: int = 168) -> dict:
                        provider || ':' || backend_model as backend,
                        AVG(tps) as avg_tps, AVG(ttft_ms) as avg_ttft, COUNT(*) as n
                 FROM usage
-                WHERE ts >= ? AND logical_model = ? AND success = 1 AND tps IS NOT NULL
+                WHERE ts >= ?{PROBE_EXCLUDE} AND logical_model = ? AND success = 1 AND tps IS NOT NULL
                 GROUP BY bucket, backend ORDER BY bucket
                 """,
                 (cutoff, model_id),
@@ -317,6 +359,40 @@ def get_backend_series(model_id: str, hours: int = 168) -> dict:
             "n": r["n"],
         })
     return {"bucket_seconds": bucket_s, "series": series}
+
+
+def clear_usage() -> None:
+    """Delete all usage rows (keep schema)."""
+    _init()
+    with _db_lock:
+        with _connect() as conn:
+            conn.execute("DELETE FROM usage")
+
+
+def enforce_retention(usage_days: int | None, log_lines: int | None) -> None:
+    """Delete old usage rows and cap log table size, then vacuum.
+
+    Call periodically (e.g. on worker startup). Values <= 0 keep everything.
+    """
+    from . import logs as _logs
+    _init()
+    _logs._init()
+    with _db_lock:
+        with _connect() as conn:
+            if usage_days and usage_days > 0:
+                cutoff = time.time() - usage_days * 86400
+                conn.execute("DELETE FROM usage WHERE ts < ?", (cutoff,))
+            if log_lines and log_lines > 0:
+                # Keep newest log_lines by id.
+                conn.execute(
+                    f"DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT {int(log_lines)})"
+                )
+            conn.commit()
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
+            conn.execute("VACUUM")
 
 
 def _table_exists(conn, name: str) -> bool:

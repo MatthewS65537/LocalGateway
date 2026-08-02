@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ class ServerConfig(BaseModel):
     cache_affinity_enabled: bool = False
     cache_affinity_ttl_sec: int = 300
     max_inflight_before_spill: int | None = None
+    usage_retention_days: int = 30
+    log_retention_lines: int = 10000
 
 
 class ProviderConfig(BaseModel):
@@ -32,7 +35,6 @@ class ProviderConfig(BaseModel):
     timeout: float = 120.0
     enabled: bool = True
     stream_idle_timeout: float | None = 60.0
-    reasoning_mode: str = "auto"  # auto (dual-emit) | passthrough
     avatar: str = ""  # custom avatar text; empty = first letter of id
 
 
@@ -62,6 +64,48 @@ class ModelConfig(BaseModel):
     avatar: str = ""  # custom avatar text; empty = first letter of id/display_name
 
 
+class TimeSlot(BaseModel):
+    """A time window with active provider backends.
+
+    ``start_hour``/``end_hour`` are 24h hours (0-23). When ``start_hour`` >
+    ``end_hour`` the span wraps midnight (e.g. 22:00-06:00). ``days_of_week``
+    uses 0=Mon..6=Sun; an empty list means every day. ``active_providers`` is
+    a whitelist of ``"provider:model"`` backend keys; an empty list means all
+    backends pass (opt-out style).
+    """
+    id: str = ""
+    name: str = ""
+    start_hour: int = Field(default=0, ge=0, le=23)
+    end_hour: int = Field(default=23, ge=0, le=23)
+    days_of_week: list[int] = Field(default_factory=list)
+    active_providers: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class TimeRoutingConfig(BaseModel):
+    """Per-model time-based routing. OFF by default (enabled=False)."""
+    enabled: bool = False
+    timezone: str = "UTC"
+    slots: list[TimeSlot] = Field(default_factory=list)
+
+
+class ModelConfig(BaseModel):
+    id: str
+    backends: list[BackendConfig] = Field(default_factory=list)
+    description: str | None = ""
+    context_length: int | None = None
+    enabled: bool = True
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    modality: str = ""
+    max_output_tokens: int | None = None
+    tags: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    default_params: dict[str, Any] = Field(default_factory=dict)
+    display_name: str = ""
+    avatar: str = ""  # custom avatar text; empty = first letter of id/display_name
+    time_routing: TimeRoutingConfig = Field(default_factory=TimeRoutingConfig)
+
+
 class PricingEntry(BaseModel):
     input: float = 0.0
     output: float = 0.0
@@ -74,6 +118,7 @@ class GatewayConfig(BaseModel):
     providers: list[ProviderConfig] = Field(default_factory=list)
     models: list[ModelConfig] = Field(default_factory=list)
     pricing: dict[str, PricingEntry] = Field(default_factory=dict)
+    version: int = 0  # bumped on every save; used for optimistic-concurrency (409) checks
 
     def provider_by_id(self, provider_id: str) -> ProviderConfig | None:
         for p in self.providers:
@@ -113,21 +158,54 @@ def _file_mtime() -> float:
         return 0.0
 
 
+def _backup_path() -> Path:
+    return _config_path.with_suffix(_config_path.suffix + ".bak")
+
+
+def _parse(raw: dict) -> GatewayConfig:
+    """Parse config with one-time field migrations for removed/renamed keys."""
+    if isinstance(raw, dict):
+        # reasoning_mode was removed from the schema (2026-08-01); strip stale keys.
+        for p in raw.get("providers", []):
+            if isinstance(p, dict):
+                p.pop("reasoning_mode", None)
+    return GatewayConfig.model_validate(raw)
+
+
 def load_config() -> GatewayConfig:
     """Load config, reloading from disk if the file changed (mtime-based).
 
     This lets a separate supervisor process edit config.json while the worker
-    picks up changes automatically.
+    picks up changes automatically. On corrupt JSON, falls back to the last-good
+    .bak file, then to an empty config, so the gateway always starts.
     """
     global _config, _config_mtime
     with _config_lock:
         mtime = _file_mtime()
         if _config is None or mtime != _config_mtime:
+            candidates = []
             if _config_path.exists():
-                raw = json.loads(_config_path.read_text(encoding="utf-8"))
-                _config = GatewayConfig.model_validate(raw)
-            else:
-                _config = GatewayConfig()
+                candidates.append(_config_path)
+            bak = _backup_path()
+            if bak.exists():
+                candidates.append(bak)
+
+            loaded = None
+            for path in candidates:
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    loaded = _parse(raw)
+                    break
+                except (json.JSONDecodeError, ValueError, OSError) as e:
+                    logs_fallback = f"config parse failed for {path}: {e}"
+                    try:
+                        from . import logs as _logs
+                        _logs.info(logs_fallback, provider="config")
+                    except Exception:
+                        pass
+                    continue
+
+            _config = loaded if loaded is not None else GatewayConfig()
             _config_mtime = mtime
         return _config
 
@@ -135,11 +213,18 @@ def load_config() -> GatewayConfig:
 def save_config(cfg: GatewayConfig) -> None:
     global _config, _config_mtime
     with _config_lock:
+        cfg.version += 1
+        data = json.dumps(cfg.model_dump(), indent=2, ensure_ascii=False)
+        # Preserve previous good copy before overwriting (atomic via os.replace).
+        if _config_path.exists():
+            try:
+                _config_path.rename(_backup_path())
+            except OSError:
+                pass
+        tmp = _config_path.with_suffix(_config_path.suffix + ".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, _config_path)
         _config = cfg
-        _config_path.write_text(
-            json.dumps(cfg.model_dump(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
         _config_mtime = _file_mtime()
 
 
