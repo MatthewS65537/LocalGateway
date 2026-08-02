@@ -30,4 +30,4 @@ jobs:
         env:
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
         with:
-          model: ollama-cloud/deepseek-v4-flash:0731-cloud
+          model: ollama-cloud/deepseek-v4-flash
