@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import load_config, set_config_path
+from .auth import check_api_key, is_page_path
 from .usage import set_db_path
 from . import logs
 from . import prober
@@ -34,13 +35,22 @@ def create_app(config_path: str = "config.json") -> FastAPI:
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
-        api_key = load_config().server.api_key
-        if api_key:
+        cfg = load_config()
+        api_key = cfg.server.api_key
+        path = request.url.path
+        # Admin routes and UI pages: loopback is always allowed (the supervisor
+        # enforces the key for remote clients before proxying here); everyone
+        # else needs the key. API routes always require the key when one is set.
+        if path.startswith("/admin") or is_page_path(path):
+            if not check_api_key(request, cfg):
+                return JSONResponse(
+                    {"error": {"message": "Invalid API key", "type": "authentication_error"}},
+                    status_code=401,
+                )
+        elif api_key and (path.startswith("/v1") or path.startswith("/api/v1")):
             auth = request.headers.get("Authorization", "")
             token = auth.replace("Bearer ", "").strip() if auth.startswith("Bearer") else auth
-            if request.url.path.startswith("/admin") or request.url.path == "/":
-                pass
-            elif token != api_key:
+            if token != api_key:
                 return JSONResponse(
                     {"error": {"message": "Invalid API key", "type": "authentication_error"}},
                     status_code=401,

@@ -22,14 +22,14 @@
         <label class="field-label" for="settings-api-key">Gateway API Key</label>
         <div class="hstack">
           <input type="password" id="settings-api-key" class="api-key-input" placeholder="(none — open access)">
-          <button type="button" class="secondary" onclick="toggleApiKeyVisibility()">Show</button>
-          <button type="button" class="secondary" onclick="copyApiKey()">Copy</button>
+          <button type="button" class="secondary" data-action="toggleApiKeyVisibility()">Show</button>
+          <button type="button" class="secondary" data-action="copyApiKey()">Copy</button>
         </div>
-        <div class="field-hint">Required as Bearer token for /v1 and /api/v1. Leave blank for no auth. Admin UI stays open locally.</div>
+        <div class="field-hint">Required as Bearer token for /v1 and /api/v1. Leave blank for no auth. The admin UI is always open to local (loopback) connections; remote clients need the key.</div>
       </div>
       <div class="hstack">
-        <button class="primary" onclick="saveServerSettings()">Save</button>
-        <button class="secondary" onclick="loadServerSettings()">Reset</button>
+        <button class="primary" data-action="saveServerSettings()">Save</button>
+        <button class="secondary" data-action="loadServerSettings()">Reset</button>
       </div>
     </div>
   </div>
@@ -39,7 +39,7 @@
     <div class="stack">
       <div class="settings-field">
         <label class="field-label" for="settings-routing-mode">Mode</label>
-        <select id="settings-routing-mode" class="input-narrow" onchange="updateDecayViz()">
+        <select id="settings-routing-mode" class="input-narrow" data-change="updateDecayViz()">
           <option value="explore">Weighted explore (probabilistic tiers)</option>
           <option value="failover">Strict failover (tier order only)</option>
         </select>
@@ -47,7 +47,7 @@
       <div id="decay-section">
         <label class="field-label" for="settings-routing-decay">Decay factor</label>
         <div class="hstack">
-          <input type="range" id="settings-routing-decay" class="input-narrow" min="0.1" max="0.9" step="0.05" value="0.4" oninput="updateDecayViz()">
+          <input type="range" id="settings-routing-decay" class="input-narrow" min="0.1" max="0.9" step="0.05" value="0.4" data-input="updateDecayViz()">
           <span id="decay-value" class="mono" style="font-size:0.9rem">0.40</span>
         </div>
         <div style="margin-top:14px">
@@ -56,8 +56,8 @@
         </div>
       </div>
       <div class="hstack">
-        <button class="primary" onclick="saveRoutingSettings()">Save</button>
-        <button class="secondary" onclick="loadRoutingSettings()">Reset</button>
+        <button class="primary" data-action="saveRoutingSettings()">Save</button>
+        <button class="secondary" data-action="loadRoutingSettings()">Reset</button>
       </div>
     </div>
   </div>
@@ -69,14 +69,14 @@
     <div class="stack">
       <div class="settings-field">
         <label class="field-label" for="tr-model-select">Model</label>
-        <select id="tr-model-select" class="input-narrow" onchange="loadTimeRouting()">
+        <select id="tr-model-select" class="input-narrow" data-change="loadTimeRouting()">
           <option value="">Select a model…</option>
         </select>
       </div>
       <div id="tr-editor" class="dimmed">
         <div class="settings-field" style="margin-bottom:14px">
           <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
-            <input type="checkbox" id="tr-enabled" onchange="toggleTimeRouting()">
+            <input type="checkbox" id="tr-enabled" data-change="toggleTimeRouting()">
             Enable time-based routing for this model
           </label>
         </div>
@@ -87,13 +87,13 @@
           </div>
           <div id="tr-slots-wrap">
             <div class="hstack" style="margin-bottom:10px">
-              <button class="secondary" onclick="showAddSlotModal()">+ Add Slot</button>
+              <button class="secondary" data-action="showAddSlotModal()">+ Add Slot</button>
             </div>
             <div id="tr-slots" class="stack"></div>
           </div>
           <div class="hstack" style="margin-top:12px">
-            <button class="primary" onclick="saveTimeRoutingConfig()">Save</button>
-            <button class="secondary" onclick="loadTimeRouting()">Reset</button>
+            <button class="primary" data-action="saveTimeRoutingConfig()">Save</button>
+            <button class="secondary" data-action="loadTimeRouting()">Reset</button>
           </div>
         </div>
       </div>
@@ -104,7 +104,7 @@
     <div class="card-head"><h2>Cache Affinity</h2></div>
     <div class="stack">
       <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
-        <input type="checkbox" id="settings-cache-affinity" onchange="toggleCacheAffinity()">
+        <input type="checkbox" id="settings-cache-affinity" data-change="toggleCacheAffinity()">
         Prefer backends with a warm prompt cache
       </label>
       <p class="field-hint" style="margin:0 0 6px">Requests are fingerprinted (hash of the system prompt + all but the last user turn) and routed to the warmest capable backend first — warm idle, warm busy, cold idle, cold busy, then rate-limited.</p>
@@ -127,9 +127,9 @@
         </div>
       </div>
       <div class="hstack">
-        <button class="primary" onclick="saveCacheAffinitySettings()">Save</button>
-        <button class="secondary" onclick="loadCacheAffinitySettings()">Reset</button>
-        <button class="secondary" onclick="clearWarmth()">Clear Warmth Data</button>
+        <button class="primary" data-action="saveCacheAffinitySettings()">Save</button>
+        <button class="secondary" data-action="loadCacheAffinitySettings()">Reset</button>
+        <button class="secondary" data-action="clearWarmth()">Clear Warmth Data</button>
       </div>
     </div>
   </div>
@@ -138,7 +138,7 @@
     <div class="card-head"><h2>Health Probes</h2></div>
     <div class="stack">
       <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
-        <input type="checkbox" id="settings-probe-enabled" checked onchange="toggleProbeSettings()">
+        <input type="checkbox" id="settings-probe-enabled" checked data-change="toggleProbeSettings()">
         Enable periodic health probes
       </label>
       <div id="probe-options" class="stack">
@@ -159,8 +159,8 @@
         </div>
       </div>
       <div class="hstack">
-        <button class="primary" onclick="saveProbeSettings()">Save</button>
-        <button class="secondary" onclick="loadProbeSettings()">Reset</button>
+        <button class="primary" data-action="saveProbeSettings()">Save</button>
+        <button class="secondary" data-action="loadProbeSettings()">Reset</button>
       </div>
     </div>
   </div>
@@ -173,8 +173,8 @@
         Show throughput over time chart on model detail
       </label>
       <div class="hstack">
-        <button class="primary" onclick="saveDisplaySettings()">Save</button>
-        <button class="secondary" onclick="loadDisplaySettings()">Reset</button>
+        <button class="primary" data-action="saveDisplaySettings()">Save</button>
+        <button class="secondary" data-action="loadDisplaySettings()">Reset</button>
       </div>
     </div>
   </div>
@@ -183,7 +183,7 @@
     <div class="card-head"><h2>Debug Tools</h2></div>
     <p class="field-hint" style="margin-bottom:14px">These actions are destructive. Use with caution.</p>
     <div class="hstack">
-      <button class="danger" onclick="clearUsageData()">Clear All Usage Data</button>
+      <button class="danger" data-action="clearUsageData()">Clear All Usage Data</button>
     </div>
   </div>
 </section>

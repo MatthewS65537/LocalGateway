@@ -8,16 +8,16 @@ function loadSettingsPage() {
 }
 
 async function loadServerSettings() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
-    const port = data.server?.port || 3456;
-    document.getElementById('settings-port').value = port;
-    const keyInput = document.getElementById('settings-api-key');
-    keyInput.value = data.server?.api_key || '';
-    keyInput.type = 'password';
-    const showBtn = keyInput.nextElementSibling;
-    if (showBtn) showBtn.textContent = 'Show';
-  } catch(e) { console.error(e); }
+  resetLoadError();
+  const { ok, data } = await apiFetch('/admin/config', { silent: true });
+  if (!ok) { loadError('settings'); return; }
+  const port = data.server?.port || 3456;
+  document.getElementById('settings-port').value = port;
+  const keyInput = document.getElementById('settings-api-key');
+  keyInput.value = data.server?.api_key || '';
+  keyInput.type = 'password';
+  const showBtn = keyInput.nextElementSibling;
+  if (showBtn) showBtn.textContent = 'Show';
 }
 
 function toggleApiKeyVisibility() {
@@ -57,14 +57,13 @@ async function saveServerSettings() {
 }
 
 async function loadRoutingSettings() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
-    const mode = data.server?.routing_mode || 'explore';
-    const decay = data.server?.routing_decay || 0.4;
-    document.getElementById('settings-routing-mode').value = mode;
-    document.getElementById('settings-routing-decay').value = decay;
-    updateDecayViz();
-  } catch(e) { console.error(e); }
+  const { ok, data } = await apiFetch('/admin/config', { silent: true });
+  if (!ok) { loadError('settings'); return; }
+  const mode = data.server?.routing_mode || 'explore';
+  const decay = data.server?.routing_decay || 0.4;
+  document.getElementById('settings-routing-mode').value = mode;
+  document.getElementById('settings-routing-decay').value = decay;
+  updateDecayViz();
 }
 
 function updateDecayViz() {
@@ -105,17 +104,16 @@ async function saveRoutingSettings() {
 }
 
 async function loadCacheAffinitySettings() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
-    const enabled = data.server?.cache_affinity_enabled === true;
-    const ttl = data.server?.cache_affinity_ttl_sec || 300;
-    const spill = data.server?.max_inflight_before_spill;
-    document.getElementById('settings-cache-affinity').checked = enabled;
-    const ttlSelect = document.getElementById('settings-cache-ttl');
-    if (ttlSelect) ttlSelect.value = String(ttl);
-    document.getElementById('settings-cache-spill').value = spill != null ? spill : '';
-    toggleCacheAffinity();
-  } catch(e) { console.error(e); }
+  const { ok, data } = await apiFetch('/admin/config', { silent: true });
+  if (!ok) { loadError('settings'); return; }
+  const enabled = data.server?.cache_affinity_enabled === true;
+  const ttl = data.server?.cache_affinity_ttl_sec || 300;
+  const spill = data.server?.max_inflight_before_spill;
+  document.getElementById('settings-cache-affinity').checked = enabled;
+  const ttlSelect = document.getElementById('settings-cache-ttl');
+  if (ttlSelect) ttlSelect.value = String(ttl);
+  document.getElementById('settings-cache-spill').value = spill != null ? spill : '';
+  toggleCacheAffinity();
 }
 
 function toggleCacheAffinity() {
@@ -154,16 +152,15 @@ async function clearWarmth() {
 }
 
 async function loadProbeSettings() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
-    const enabled = data.server?.probe_enabled !== false;
-    const interval = data.server?.probe_interval_s || 3600;
-    const maxTokens = data.server?.probe_max_tokens || 64;
-    document.getElementById('settings-probe-enabled').checked = enabled;
-    document.getElementById('settings-probe-interval').value = interval;
-    document.getElementById('settings-probe-max-tokens').value = maxTokens;
-    toggleProbeSettings();
-  } catch(e) { console.error(e); }
+  const { ok, data } = await apiFetch('/admin/config', { silent: true });
+  if (!ok) { loadError('settings'); return; }
+  const enabled = data.server?.probe_enabled !== false;
+  const interval = data.server?.probe_interval_s || 3600;
+  const maxTokens = data.server?.probe_max_tokens || 64;
+  document.getElementById('settings-probe-enabled').checked = enabled;
+  document.getElementById('settings-probe-interval').value = interval;
+  document.getElementById('settings-probe-max-tokens').value = maxTokens;
+  toggleProbeSettings();
 }
 
 function toggleProbeSettings() {
@@ -186,11 +183,10 @@ async function saveProbeSettings() {
 }
 
 async function loadDisplaySettings() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
-    const enabled = data.server?.chart_enabled !== false;
-    document.getElementById('settings-chart-enabled').checked = enabled;
-  } catch(e) { console.error(e); }
+  const { ok, data } = await apiFetch('/admin/config', { silent: true });
+  if (!ok) { loadError('settings'); return; }
+  const enabled = data.server?.chart_enabled !== false;
+  document.getElementById('settings-chart-enabled').checked = enabled;
 }
 
 async function saveDisplaySettings() {
@@ -291,8 +287,8 @@ function renderTimeSlots(slots) {
         '<div class="filter-hint" style="margin-top:4px">Providers: <code>' + esc(provs) + '</code></div>' +
       '</div>' +
       '<div class="hstack" style="gap:8px">' +
-        '<button class="secondary btn-sm" onclick="showEditSlotModal(\'' + escAttr(slot.id) + '\')">Edit</button>' +
-        '<button class="danger btn-sm" onclick="deleteTimeSlot(\'' + escAttr(slot.id) + '\')">Delete</button>' +
+        '<button class="secondary btn-sm" data-slot="' + escAttr(slot.id) + '" data-action="showEditSlotModal(this.dataset.slot)">Edit</button>' +
+        '<button class="danger btn-sm" data-slot="' + escAttr(slot.id) + '" data-action="deleteTimeSlot(this.dataset.slot)">Delete</button>' +
       '</div>' +
     '</div>';
   }).join('');

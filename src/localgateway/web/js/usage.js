@@ -8,9 +8,12 @@ function setUsageRange(hours, btn) {
   loadUsage();
 }
 async function loadUsage() {
-  try {
-    const { data } = await fetchJSON('/admin/usage?hours=' + usageRangeHours);
-    const t = data.total;
+  const loading = document.getElementById('usage-loading');
+  if (loading) loading.classList.remove('hidden');
+  const { ok, data } = await apiFetch('/admin/usage?hours=' + usageRangeHours, { silent: true });
+  if (loading) loading.classList.add('hidden');
+  if (!ok) { loadError('usage data'); return; }
+  const t = data.total;
     document.getElementById('usage-stats').innerHTML =
       '<div class="stat-cell"><div class="stat-num">'+fmt(t.requests,0)+'</div><div class="stat-cap">Requests</div></div>'
       + '<div class="stat-cell"><div class="stat-num">'+fmt(t.input_tokens||0,0)+'</div><div class="stat-cap">Input Tokens</div></div>'
@@ -34,7 +37,6 @@ async function loadUsage() {
       + '<td>'+fmt((v.input_tokens||0)+(v.output_tokens||0),0)+'</td>'
       + '<td>'+fmtCost(v.cost)+'</td></tr>').join('');
     document.getElementById('usage-backend').innerHTML = bp || '<tr><td colspan="9" class="empty">No data</td></tr>';
-  } catch(e) { console.error(e); }
 }
 
 document.addEventListener('DOMContentLoaded', loadUsage);

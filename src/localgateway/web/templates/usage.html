@@ -9,9 +9,9 @@
       <p class="page-sub">Token usage and cost across providers and models.</p>
     </div>
     <div class="seg" id="usage-range">
-      <button class="active" onclick="setUsageRange(24, this)">24h</button>
-      <button onclick="setUsageRange(168, this)">7d</button>
-      <button onclick="setUsageRange(720, this)">30d</button>
+      <button class="active" data-action="setUsageRange(24, this)">24h</button>
+      <button data-action="setUsageRange(168, this)">7d</button>
+      <button data-action="setUsageRange(720, this)">30d</button>
     </div>
   </div>
 
@@ -24,6 +24,7 @@
     <div class="stat-cell"><div class="stat-num accent">—</div><div class="stat-cap">Est. Cost</div></div>
   </div>
 
+  <div id="usage-loading" class="skeleton skeleton-block"></div>
   <div class="grid grid-2">
     <div class="card">
       <div class="card-head"><h2>By Provider</h2></div>

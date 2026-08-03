@@ -135,11 +135,10 @@ function stopInflightPolling() {
 }
 async function pollInflight() {
   if (!modelDetailState.id || document.hidden) return;
-  try {
-    const { data } = await fetchJSON('/admin/inflight');
-    modelDetailState.inflight = data || {};
-    updateInflightIndicators();
-  } catch(e) {}
+  const { ok, data } = await apiFetch('/admin/inflight', { silent: true });
+  if (!ok) return;
+  modelDetailState.inflight = data || {};
+  updateInflightIndicators();
 }
 function updateInflightIndicators() {
   const inflight = modelDetailState.inflight || {};
@@ -276,8 +275,11 @@ async function reloadModelDetail() {
   const id = modelDetailState.id;
   if (!id) return;
 
+  resetLoadError();
   if (!currentConfig) {
-    try { currentConfig = (await fetchJSON('/admin/config')).data; } catch(e) { console.error(e); }
+    const { ok, data } = await apiFetch('/admin/config', { silent: true });
+    if (!ok) { loadError('model data'); return; }
+    currentConfig = data;
   }
 
   const p = document.getElementById('detail-p').value;
@@ -298,7 +300,7 @@ async function reloadModelDetail() {
     + (disabled ? ' <span class="badge badge-gray">disabled</span>' : '');
   document.getElementById('detail-slug-row').innerHTML =
     '<code>' + esc(id) + '</code>'
-    + '<button class="copy-btn" data-id="'+escAttr(id)+'" onclick="copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>'
+    + '<button class="copy-btn" data-id="'+escAttr(id)+'" data-stop data-action="copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>'
     + '<span class="filter-hint">· '+((cfgModel.backends || []).filter(b=>b.enabled!==false).length)+' backends</span>';
   document.getElementById('detail-desc').textContent = cfgModel.description || '';
 
@@ -754,7 +756,7 @@ function renderDetailTable(backends) {
       + '<td><span class="routing-dot '+(isSnoozed?'snoozed':'')+'" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" title="'+(isSnoozed?'Click to manage snooze':'Click to snooze')+'"></span>'
         + providerAvatar(b.provider, 20, (b.provider_avatar || ''))
         + '<code style="color:var(--shade)">'+esc(b.provider)+'</code>:<code>'+esc(b.backend_model)+'</code> '+badge
-        + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" onclick="editProviderPricing(this.dataset.provider, this.dataset.model)" title="Edit pricing">$</button></td>'
+        + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-action="editProviderPricing(this.dataset.provider, this.dataset.model)" title="Edit pricing">$</button></td>'
       + '<td>'+(b.context_length ? fmtTokens(b.context_length) : '—')+'</td>'
       + '<td>'+(b.max_output_tokens ? fmtTokens(b.max_output_tokens) : '—')+'</td>'
       + '<td>'+cacheBadge(b)+'</td>'
@@ -766,7 +768,7 @@ function renderDetailTable(backends) {
       + '<td>'+(b.latency_ms != null ? fmt(b.latency_ms/1000, 2)+'s' : '—')+'</td>'
       + '<td>'+up+'</td>'
       + '<td>'+fmt(b.requests, 0)+'</td>'
-      + '<td style="padding:4px 8px"><button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" onclick="removeBackendFromModel(this.dataset.provider, this.dataset.model)" title="Remove provider">×</button></td>'
+      + '<td style="padding:4px 8px"><button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-action="removeBackendFromModel(this.dataset.provider, this.dataset.model)" title="Remove provider">×</button></td>'
       + '</tr>';
   }).join('');
 }
@@ -798,24 +800,23 @@ function editProviderPricing(provider, backendModel) {
 async function saveProviderPricing(provider, backendModel, overlay) {
   const get = id => { const v = document.getElementById(id).value; return v === '' ? null : parseFloat(v) / 1e6; };
   const key = provider + ':' + backendModel;
-  currentConfig.pricing = currentConfig.pricing || {};
-  currentConfig.pricing[key] = {
+  const pricing = {
     input: get('px-input'),
     output: get('px-output'),
     cache_read: get('px-cache-read'),
     cache_write: get('px-cache-write'),
   };
-  try {
-    const r = await fetch('/admin/config', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(currentConfig) });
-    if (r.ok) {
-      toast('Pricing saved', 'success');
-      if (overlay) closeModal(overlay);
-      await reloadModelDetail();
-    } else {
-      toast('Failed to save pricing', 'error');
-    }
-  } catch(e) {
-    toast('Error: ' + e.message, 'error');
+  const { ok } = await saveConfigSection(data => {
+    data.pricing = data.pricing || {};
+    data.pricing[key] = pricing;
+  });
+  if (ok) {
+    toast('Pricing saved', 'success');
+    if (overlay) closeModal(overlay);
+    currentConfig = (await fetchJSON('/admin/config')).data;
+    await reloadModelDetail();
+  } else {
+    toast('Failed to save pricing', 'error');
   }
 }
 
@@ -1001,10 +1002,10 @@ function showAddBackendModal() {
     title: 'Add Provider to Model',
     bodyHtml:
       '<div class="field"><label class="field-label" for="new-backend-provider">Provider *</label>' +
-        '<select id="new-backend-provider" onchange="loadProviderModelSuggestions()"><option value="">Select provider</option>' +
+        '<select id="new-backend-provider" data-change="loadProviderModelSuggestions()"><option value="">Select provider</option>' +
         providers.map(p => '<option value="'+esc(p.id)+'">'+esc(p.name || p.id)+'</option>').join('') + '</select></div>' +
       '<div class="field"><label class="field-label" for="new-backend-model">Backend Model *</label>' +
-        '<input type="text" id="new-backend-model" placeholder="Pick from list or type a custom model ID" oninput="filterProviderModelSuggestions()">' +
+        '<input type="text" id="new-backend-model" placeholder="Pick from list or type a custom model ID" data-input="filterProviderModelSuggestions()">' +
         '<div id="new-backend-model-status" class="filter-hint" style="margin-top:4px;min-height:14px"></div>' +
         '<div id="new-backend-model-list" class="discover-list" style="display:none"></div></div>' +
       '<div class="field"><label class="field-label" for="new-backend-priority">Priority (Tier)</label>' +
@@ -1078,16 +1079,13 @@ async function addBackend(overlay) {
   const okBtn = overlay && overlay.querySelector('[data-ok]');
   if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'Adding…'; }
   try {
-    const cfgModel = currentConfig && currentConfig.models.find(m => m.id === modelDetailState.id);
-    if (!cfgModel) { toast('Model not found', 'error'); return; }
-    cfgModel.backends = cfgModel.backends || [];
-    cfgModel.backends.push({ provider, model, priority, enabled: true, cache_supported: cacheSupported });
-    const r = await fetch('/admin/config', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(currentConfig)
+    const { ok } = await saveConfigSection(data => {
+      const cfgModel = data.models && data.models.find(m => m.id === modelDetailState.id);
+      if (!cfgModel) throw new Error('Model not found');
+      cfgModel.backends = cfgModel.backends || [];
+      cfgModel.backends.push({ provider, model, priority, enabled: true, cache_supported: cacheSupported });
     });
-    if (r.ok) {
+    if (ok) {
       toast('Provider added', 'success');
       if (overlay) closeModal(overlay);
       reloadModelDetail();

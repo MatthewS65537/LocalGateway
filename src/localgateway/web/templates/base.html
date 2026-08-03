@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}LocalGateway{% endblock %}</title>
 <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
-<script>(function(){var t=localStorage.getItem('lg-theme');if(!t){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';}document.documentElement.setAttribute('data-theme',t);})();</script>
+<script src="/static/js/theme-init.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -17,14 +17,14 @@
     <span class="logo-text">Local<span class="tld">Gateway</span></span>
   </a>
   <div class="top-bar-left">
-    <button type="button" id="global-search" class="search-trigger" onclick="openCommandPalette()" title="Search models, providers, actions">
+    <button type="button" id="global-search" class="search-trigger" data-action="openCommandPalette()" title="Search models, providers, actions">
       <svg class="st-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
       <span class="st-text">Search models, providers, actions…</span>
       <span class="st-kbd"><kbd>⌘</kbd><kbd>K</kbd></span>
     </button>
   </div>
   <div class="top-bar-right">
-    <button id="theme-toggle" class="top-bar-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
+    <button id="theme-toggle" class="top-bar-btn" data-action="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
       <span data-theme-toggle>☾</span>
     </button>
   </div>
@@ -38,7 +38,7 @@
 </div>
 
 <div class="app">
-  <div class="sidebar-backdrop" onclick="toggleSidebar()"></div>
+  <div class="sidebar-backdrop" data-action="toggleSidebar()"></div>
   <aside class="sidebar">
     <nav class="nav">
       <a href="/" class="nav-item{% if active_page == 'dashboard' %} active{% endif %}" data-page="dashboard" data-tip="Dashboard">
@@ -66,12 +66,12 @@
         <span class="nav-label">Settings</span>
       </a>
     </nav>
-    <div class="server-pill" id="server-pill" onclick="location.href='/logs'" title="Go to server controls">
+    <div class="server-pill" id="server-pill" data-nav="/logs" title="Go to server controls">
       <span class="status-dot" id="pill-dot"></span>
       <span id="pill-text">Checking…</span>
     </div>
   </aside>
-  <button type="button" class="sidebar-edge-toggle" id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar (⌘B)" aria-label="Toggle sidebar">
+  <button type="button" class="sidebar-edge-toggle" id="sidebar-toggle" data-action="toggleSidebar()" title="Toggle sidebar (⌘B)" aria-label="Toggle sidebar">
     <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>
   </button>
 

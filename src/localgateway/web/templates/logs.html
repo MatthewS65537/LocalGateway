@@ -14,9 +14,9 @@
     <div class="card-head">
       <h2>Server Control</h2>
       <div class="hstack">
-        <button class="success" id="log-start" onclick="startServer()">Start</button>
-        <button class="danger" id="log-stop" onclick="stopServer()">Stop</button>
-        <button class="secondary" onclick="restartServer()">Restart</button>
+        <button class="success" id="log-start" data-action="startServer()">Start</button>
+        <button class="danger" id="log-stop" data-action="stopServer()">Stop</button>
+        <button class="secondary" data-action="restartServer()">Restart</button>
       </div>
     </div>
     <div class="hstack status-row">
@@ -31,22 +31,22 @@
       <h2>Activity Log</h2>
       <div class="log-controls">
         <label class="field-label auto-refresh-label">
-          <input type="checkbox" id="log-autorefresh" checked onchange="toggleLogAutoRefresh()"> Auto-refresh
+          <input type="checkbox" id="log-autorefresh" checked data-change="toggleLogAutoRefresh()"> Auto-refresh
         </label>
-        <button class="secondary" onclick="loadLogs()">Refresh</button>
-        <button class="danger" onclick="clearLogs()">Clear</button>
+        <button class="secondary" data-action="loadLogs()">Refresh</button>
+        <button class="danger" data-action="clearLogs()">Clear</button>
       </div>
     </div>
     <div class="log-filters">
-      <select id="log-level" onchange="loadLogs()">
+      <select id="log-level" data-change="loadLogs()">
         <option value="">All levels</option>
         <option value="INFO">INFO</option>
         <option value="WARN">WARN</option>
         <option value="ERROR">ERROR</option>
       </select>
-      <input type="text" id="log-search" placeholder="Search message, model, provider…" oninput="debouncedLoadLogs()">
+      <input type="text" id="log-search" placeholder="Search message, model, provider…" data-input="debouncedLoadLogs()">
     </div>
-    <div class="log-list" id="log-list"><div class="empty">Loading…</div></div>
+    <div class="log-list" id="log-list"><div class="skeleton skeleton-block" style="min-height:120px"></div></div>
   </div>
 </section>
 {% endblock %}

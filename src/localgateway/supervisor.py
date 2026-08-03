@@ -12,7 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import logs
-from .config import GatewayConfig, load_config, set_config_path
+from .auth import check_api_key, is_loopback_host, is_page_path
+from .config import config_recovered_from, load_config, set_config_path
 from .usage import set_db_path
 from .endpoints.admin import router as admin_router
 from .endpoints.web import NoCacheStaticFiles, router as web_router
@@ -94,16 +95,6 @@ class Supervisor:
         }
 
 
-def _check_admin_auth(request: Request, config: GatewayConfig) -> bool:
-    """Admin routes require the API key if one is set (like the worker)."""
-    api_key = config.server.api_key
-    if not api_key:
-        return True
-    auth = request.headers.get("Authorization", "")
-    token = auth.replace("Bearer ", "").strip() if auth.startswith("Bearer") else auth
-    return token == api_key
-
-
 def create_supervisor_app(sup: Supervisor) -> FastAPI:
     app = FastAPI(title="LocalGateway Supervisor")
     client = httpx.AsyncClient(
@@ -114,13 +105,73 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
     app.state.sup = sup
 
     @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'self'; form-action 'self'")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
+
+    @app.middleware("http")
     async def admin_auth_middleware(request: Request, call_next):
-        if request.url.path.startswith("/admin"):
-            if not _check_admin_auth(request, load_config()):
+        # Admin routes and UI pages: loopback is always allowed (the local
+        # dashboard); everyone else needs the key. API routes are handled by
+        # api_auth_middleware.
+        path = request.url.path
+        if path.startswith("/admin") or is_page_path(path):
+            if not check_api_key(request, load_config()):
                 return JSONResponse(
                     {"error": {"message": "Invalid API key", "type": "authentication_error"}},
                     status_code=401,
                 )
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def origin_guard(request: Request, call_next):
+        # DNS-rebinding protection: mutating /admin requests without a Bearer
+        # token must come from a browser page served by this host. Loopback
+        # curl/API clients don't send Origin and pass through.
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            path = request.url.path
+            if path.startswith("/admin"):
+                auth = request.headers.get("Authorization", "")
+                if not auth:
+                    origin = request.headers.get("Origin") or request.headers.get("Referer") or ""
+                    host = request.headers.get("host", "")
+                    if origin:
+                        try:
+                            from urllib.parse import urlparse
+                            o = urlparse(origin)
+                            if o.netloc and o.netloc != host:
+                                return JSONResponse(
+                                    {"error": {"message": "Invalid origin", "type": "forbidden"}},
+                                    status_code=403,
+                                )
+                        except Exception:
+                            pass
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def api_auth_middleware(request: Request, call_next):
+        # API routes (/v1, /api/v1) always require the key when one is set.
+        # Admin routes and pages are handled by admin_auth_middleware.
+        path = request.url.path
+        if path.startswith("/admin") or is_page_path(path):
+            return await call_next(request)
+        if path.startswith("/v1") or path.startswith("/api/v1"):
+            cfg = load_config()
+            if cfg.server.api_key:
+                auth = request.headers.get("Authorization", "")
+                token = auth.replace("Bearer ", "").strip() if auth.startswith("Bearer") else auth
+                if token != cfg.server.api_key:
+                    return JSONResponse(
+                        {"error": {"message": "Invalid API key", "type": "authentication_error"}},
+                        status_code=401,
+                    )
         return await call_next(request)
 
     # Jinja2-templated pages + /static (from endpoints/web.py)
@@ -138,7 +189,10 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
 
     @app.get("/admin/server/status")
     async def server_status():
-        return JSONResponse(sup.status())
+        status = sup.status()
+        recovered = config_recovered_from()
+        status["config_recovered"] = recovered
+        return JSONResponse(status)
 
     @app.post("/admin/server/start")
     async def server_start():
@@ -255,6 +309,12 @@ def run_supervisor(config_path: str, host: str, port: int) -> None:
     set_config_path(config_path)
     set_db_path("data/usage.db")
     logs.set_db_path("data/usage.db")
+    cfg = load_config()
+    if not is_loopback_host(host) and not cfg.server.api_key:
+        logs.warn(
+            "Binding to a non-loopback host without an API key: the admin UI and API are open to your network.",
+            provider="supervisor",
+        )
     sup = Supervisor(config_path, host, port, worker_port)
     sup.start()
     app = create_supervisor_app(sup)

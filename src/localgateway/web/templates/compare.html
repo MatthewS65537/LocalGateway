@@ -3,7 +3,7 @@
 {% set active_page = "models" %}
 {% block content %}
 <section class="page">
-  <button class="secondary btn-back" onclick="location.href='/models'">← All models</button>
+  <button class="secondary btn-back" data-nav="/models">← All models</button>
   <h1 class="page-title">Compare Models</h1>
   <p class="page-sub">Side-by-side specs, pricing, and 7-day performance.</p>
   <div id="compare-loading" class="skeleton skeleton-block"></div>
@@ -12,6 +12,5 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script>window.__COMPARE_IDS__ = {{ ids|tojson }};</script>
 <script src="/static/js/compare.js"></script>
 {% endblock %}

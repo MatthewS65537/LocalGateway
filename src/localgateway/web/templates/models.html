@@ -9,16 +9,16 @@
       <p class="page-sub">Your gateway model catalog — throughput, latency, and uptime per provider.</p>
     </div>
     <div class="hstack">
-      <button class="secondary" onclick="toggleCompareMode()" id="compare-btn">Compare</button>
-      <button class="primary" onclick="showAddModelModal()">+ Add Model</button>
+      <button class="secondary" data-action="toggleCompareMode()" id="compare-btn">Compare</button>
+      <button class="primary" data-action="showAddModelModal()">+ Add Model</button>
     </div>
   </div>
 
   <div class="modality-tabs" id="modality-tabs"></div>
 
   <div class="toolbar">
-    <input type="search" id="models-search" class="search-input" placeholder="Search models…" oninput="renderModelCatalog()">
-    <select id="models-sort" onchange="renderModelCatalog()">
+    <input type="search" id="models-search" class="search-input" placeholder="Search models…" data-input="renderModelCatalog()">
+    <select id="models-sort" data-change="renderModelCatalog()">
       <option value="tokens">Most used</option>
       <option value="name">Name</option>
       <option value="tps">Best throughput</option>
@@ -26,24 +26,24 @@
       <option value="context">Largest context</option>
     </select>
     <div class="seg" id="catalog-view-toggle">
-      <button class="active" type="button" onclick="setCatalogView('cards', this)">List</button>
-      <button type="button" onclick="setCatalogView('table', this)">Table</button>
+      <button class="active" type="button" data-action="setCatalogView('cards', this)">List</button>
+      <button type="button" data-action="setCatalogView('table', this)">Table</button>
     </div>
   </div>
 
   <div class="filter-bar" id="catalog-filters">
-    <select id="filter-provider" onchange="renderModelCatalog()">
+    <select id="filter-provider" data-change="renderModelCatalog()">
       <option value="">All providers</option>
     </select>
-    <select id="filter-capability" onchange="renderModelCatalog()">
+    <select id="filter-capability" data-change="renderModelCatalog()">
       <option value="">All capabilities</option>
       <option value="vision">Vision</option>
       <option value="tools">Tools</option>
       <option value="json_mode">JSON Mode</option>
       <option value="audio">Audio</option>
     </select>
-    <input type="number" id="filter-min-ctx" placeholder="Min context" oninput="renderModelCatalog()">
-    <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" oninput="renderModelCatalog()">
+    <input type="number" id="filter-min-ctx" placeholder="Min context" data-input="renderModelCatalog()">
+    <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" data-input="renderModelCatalog()">
     <span class="filter-hint">Tokens measured over the last 7 days</span>
   </div>
   <div id="models-loading" class="skeleton skeleton-block"></div>

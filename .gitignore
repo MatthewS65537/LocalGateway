@@ -2,6 +2,8 @@
 cc_mnt/
 data/
 config.json
+config.json.bak
+config.json.bak.*
 snooze.json
 exports/
 

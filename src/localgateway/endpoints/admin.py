@@ -105,9 +105,12 @@ async def set_provider_api_key(request: Request):
     return JSONResponse({"status": "ok"})
 
 
-@router.get("/admin/config/api-key/{provider_id}")
+@router.post("/admin/config/api-key/{provider_id}/reveal")
 async def reveal_provider_api_key(provider_id: str):
-    """Return the real API key for one provider (admin-only)."""
+    """Return the real API key for one provider (admin-only).
+
+    POST-only so plaintext keys never appear in browser history or access logs.
+    """
     cfg = load_config()
     provider = cfg.provider_by_id(provider_id)
     if provider is None:

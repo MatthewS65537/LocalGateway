@@ -4,7 +4,7 @@
 {% block content %}
 <section class="page">
   <span id="model-id" data-model-id="{{ model_id }}"></span>
-  <button class="secondary btn-back" onclick="location.href='/models'">← All models</button>
+  <button class="secondary btn-back" data-nav="/models">← All models</button>
 
   <div class="detail-hero" id="detail-hero">
     <span id="detail-avatar"></span>
@@ -13,10 +13,10 @@
       <div class="hero-slug" id="detail-slug-row"></div>
       <div class="hero-desc" id="detail-desc"></div>
       <div class="hero-btns">
-        <button class="secondary" onclick="showMetadataDrawer()" id="metadata-show-btn">☰ Metadata</button>
-        <button class="secondary" onclick="editModelMetadata()" id="metadata-edit-btn">✎ Edit metadata</button>
-        <button class="secondary" id="probe-now-btn" onclick="probeModelNow()">Probe now</button>
-        <button class="secondary" onclick="location.href='/compare/{{ model_id }}'">Compare</button>
+        <button class="secondary" data-action="showMetadataDrawer()" id="metadata-show-btn">☰ Metadata</button>
+        <button class="secondary" data-action="editModelMetadata()" id="metadata-edit-btn">✎ Edit metadata</button>
+        <button class="secondary" id="probe-now-btn" data-action="probeModelNow()">Probe now</button>
+        <button class="secondary" data-nav="/compare/{model}" data-model="{{ model_id }}">Compare</button>
       </div>
     </div>
   </div>
@@ -37,15 +37,15 @@
         <h2>Provider Config</h2>
         <div class="hstack">
           <span class="filter-hint">Percentile</span>
-          <select id="detail-p" class="input-sm" onchange="reloadModelDetail()">
+          <select id="detail-p" class="input-sm" data-change="reloadModelDetail()">
             <option value="p50">P50</option>
             <option value="p90">P90</option>
             <option value="p99">P99</option>
           </select>
           <div class="seg" id="detail-range">
-            <button class="active" onclick="setDetailRange(24, this)">24h</button>
-            <button onclick="setDetailRange(168, this)">7d</button>
-            <button onclick="setDetailRange(720, this)">30d</button>
+            <button class="active" data-action="setDetailRange(24, this)">24h</button>
+            <button data-action="setDetailRange(168, this)">7d</button>
+            <button data-action="setDetailRange(720, this)">30d</button>
           </div>
         </div>
       </div>
@@ -53,27 +53,27 @@
         <table id="detail-table">
           <thead><tr>
             <th class="th-sort" style="width:34px"></th>
-            <th class="th-sort" data-col="priority" onclick="sortDetail('priority')">Tier</th>
-            <th class="th-sort" data-col="backend" onclick="sortDetail('backend')">Provider</th>
-            <th class="th-sort" data-col="context_length" onclick="sortDetail('context_length')">Context</th>
-            <th class="th-sort" data-col="max_output_tokens" onclick="sortDetail('max_output_tokens')">Max Out</th>
-            <th class="th-sort" data-col="cache_supported" onclick="sortDetail('cache_supported')">Cache</th>
-            <th class="th-sort" data-col="input_price" onclick="sortDetail('input_price')">$/M In</th>
-            <th class="th-sort" data-col="output_price" onclick="sortDetail('output_price')">$/M Out</th>
-            <th class="th-sort" data-col="cache_read_price" onclick="sortDetail('cache_read_price')">$/M Cache</th>
-            <th class="th-sort" data-col="ttft_ms" onclick="sortDetail('ttft_ms')">TTFT</th>
-            <th class="th-sort" data-col="tps" onclick="sortDetail('tps')">Throughput</th>
-            <th class="th-sort" data-col="latency_ms" onclick="sortDetail('latency_ms')">Latency</th>
-            <th class="th-sort" data-col="success_rate" onclick="sortDetail('success_rate')">Uptime</th>
-            <th class="th-sort" data-col="requests" onclick="sortDetail('requests')">Reqs</th>
+            <th class="th-sort" data-col="priority" data-action="sortDetail('priority')">Tier</th>
+            <th class="th-sort" data-col="backend" data-action="sortDetail('backend')">Provider</th>
+            <th class="th-sort" data-col="context_length" data-action="sortDetail('context_length')">Context</th>
+            <th class="th-sort" data-col="max_output_tokens" data-action="sortDetail('max_output_tokens')">Max Out</th>
+            <th class="th-sort" data-col="cache_supported" data-action="sortDetail('cache_supported')">Cache</th>
+            <th class="th-sort" data-col="input_price" data-action="sortDetail('input_price')">$/M In</th>
+            <th class="th-sort" data-col="output_price" data-action="sortDetail('output_price')">$/M Out</th>
+            <th class="th-sort" data-col="cache_read_price" data-action="sortDetail('cache_read_price')">$/M Cache</th>
+            <th class="th-sort" data-col="ttft_ms" data-action="sortDetail('ttft_ms')">TTFT</th>
+            <th class="th-sort" data-col="tps" data-action="sortDetail('tps')">Throughput</th>
+            <th class="th-sort" data-col="latency_ms" data-action="sortDetail('latency_ms')">Latency</th>
+            <th class="th-sort" data-col="success_rate" data-action="sortDetail('success_rate')">Uptime</th>
+            <th class="th-sort" data-col="requests" data-action="sortDetail('requests')">Reqs</th>
             <th style="width:36px"></th>
           </tr></thead>
           <tbody id="detail-rows"></tbody>
         </table>
       </div>
       <div class="hstack" style="margin-top:12px">
-        <button class="secondary btn-sm" onclick="addNewTier()">+ Add Tier</button>
-        <button class="secondary btn-sm" onclick="showAddBackendModal()">+ Add Provider</button>
+        <button class="secondary btn-sm" data-action="addNewTier()">+ Add Tier</button>
+        <button class="secondary btn-sm" data-action="showAddBackendModal()">+ Add Provider</button>
         <span class="filter-hint">Drag rows to reorder. Same tier shares traffic.</span>
       </div>
     </div>
@@ -84,14 +84,14 @@
       <div class="card-head">
         <h2>Throughput over time <span class="filter-hint">(tokens/sec per provider)</span></h2>
         <div class="hstack">
-          <input type="number" id="chart-hours" class="input-sm" min="1" max="2160" value="24" title="Hours to display" onchange="setChartHours(this.value)">
+          <input type="number" id="chart-hours" class="input-sm" min="1" max="2160" value="24" title="Hours to display" data-change="setChartHours(this.value)">
           <span class="filter-hint">h</span>
           <span class="chart-sep"></span>
           <span class="filter-hint">Y:</span>
-          <input type="number" id="chart-ymin" class="input-xs" min="0" placeholder="0" title="Y-axis min" onchange="setChartYRange()">
+          <input type="number" id="chart-ymin" class="input-xs" min="0" placeholder="0" title="Y-axis min" data-change="setChartYRange()">
           <span class="filter-hint">–</span>
-          <input type="number" id="chart-ymax" class="input-sm" min="1" placeholder="2000" title="Y-axis max (blank=auto)" onchange="setChartYRange()">
-          <button class="secondary btn-sm" onclick="resetChartControls()">Reset</button>
+          <input type="number" id="chart-ymax" class="input-sm" min="1" placeholder="2000" title="Y-axis max (blank=auto)" data-change="setChartYRange()">
+          <button class="secondary btn-sm" data-action="resetChartControls()">Reset</button>
         </div>
       </div>
       <div id="detail-chart"></div>
@@ -99,11 +99,11 @@
   </section>
 </section>
 
-<button id="routing-help-btn" onclick="toggleRoutingHelp()" title="Routing guide">?</button>
+<button id="routing-help-btn" data-action="toggleRoutingHelp()" title="Routing guide">?</button>
 <div id="routing-help-panel" class="hidden">
   <div class="hstack" style="justify-content:space-between;margin-bottom:12px">
     <h3 style="font-size:0.92rem">Routing Guide</h3>
-    <button class="ghost" onclick="toggleRoutingHelp()" aria-label="Close" style="font-size:1.1rem">&times;</button>
+    <button class="ghost" data-action="toggleRoutingHelp()" aria-label="Close" style="font-size:1.1rem">&times;</button>
   </div>
   <div class="routing-guide-body">
     <p><strong>Tiers:</strong> Providers in the same tier share traffic. If all tier-1 providers fail, gateway falls back to tier-2.</p>
@@ -111,15 +111,15 @@
     <p><strong>Probe:</strong> Test providers with small requests to verify connectivity and measure latency.</p>
   </div>
 </div>
-<button id="right-edge-toggle" class="right-edge-toggle" onclick="toggleMetadataDrawer()" title="Toggle metadata" aria-label="Toggle metadata">
+<button id="right-edge-toggle" class="right-edge-toggle" data-action="toggleMetadataDrawer()" title="Toggle metadata" aria-label="Toggle metadata">
   <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>
   <span class="edge-label">Metadata</span>
 </button>
-<div id="metadata-drawer-backdrop" class="drawer-backdrop hidden" onclick="hideMetadataDrawer()"></div>
+<div id="metadata-drawer-backdrop" class="drawer-backdrop hidden" data-action="hideMetadataDrawer()"></div>
 <div id="metadata-drawer" class="detail-drawer hidden">
   <div class="drawer-head">
     <h3>Metadata — <span id="drawer-model-title"></span></h3>
-    <button class="ghost" onclick="hideMetadataDrawer()" aria-label="Close">&times;</button>
+    <button class="ghost" data-action="hideMetadataDrawer()" aria-label="Close">&times;</button>
   </div>
   <div class="drawer-body">
     <div id="meta-grid" class="meta-grid">

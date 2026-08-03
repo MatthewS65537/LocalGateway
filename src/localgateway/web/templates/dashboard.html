@@ -13,11 +13,12 @@
   <div class="card">
     <div class="card-head">
       <h2>Gateway Status</h2>
+      <span id="config-recovered-badge" class="badge badge-yellow hidden" title="">config recovered from backup</span>
       <div class="hstack">
-        <button class="success" id="dash-start" onclick="startServer()">Start</button>
-        <button class="danger" id="dash-stop" onclick="stopServer()">Stop</button>
-        <button class="secondary" onclick="restartServer()">Restart</button>
-        <button class="danger" onclick="shutdownGateway()" title="Stop gateway worker and close dashboard">Shutdown</button>
+        <button class="success" id="dash-start" data-action="startServer()">Start</button>
+        <button class="danger" id="dash-stop" data-action="stopServer()">Stop</button>
+        <button class="secondary" data-action="restartServer()">Restart</button>
+        <button class="danger" data-action="shutdownGateway()" title="Stop gateway worker and close dashboard">Shutdown</button>
       </div>
     </div>
     <div class="hstack status-row" id="dash-status">
@@ -25,7 +26,7 @@
       <span><span class="muted">PID:</span> <span class="mono" id="dash-pid">—</span></span>
       <span><span class="muted">Uptime:</span> <span class="mono" id="dash-uptime">—</span></span>
       <span><span class="muted">Port:</span>
-        <input type="number" id="dash-port-input" class="port-input" value="3456" min="1" max="65535" onchange="savePortFromDash()">
+        <input type="number" id="dash-port-input" class="port-input" value="3456" min="1" max="65535" data-change="savePortFromDash()">
       </span>
     </div>
   </div>
@@ -43,7 +44,7 @@
       <div id="health-list"></div>
     </div>
     <div class="card">
-      <div class="card-head"><h2>Active Rate Limits</h2><button class="secondary btn-sm" onclick="clearRateLimits()">Clear all</button></div>
+      <div class="card-head"><h2>Active Rate Limits</h2><button class="secondary btn-sm" data-action="clearRateLimits()">Clear all</button></div>
       <div id="ratelimit-list"></div>
     </div>
   </div>

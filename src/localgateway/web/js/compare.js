@@ -1,6 +1,6 @@
 // compare.js — side-by-side model comparison
 (async function initCompare() {
-  const ids = window.__COMPARE_IDS__ || '';
+  const ids = (window.__COMPARE_IDS__ || '').toString() || decodeURIComponent(location.pathname.replace(/^\/compare\//, ''));
   const loading = document.getElementById('compare-loading');
   const errEl = document.getElementById('compare-error');
   const wrap = document.getElementById('compare-wrap');
@@ -58,7 +58,7 @@
         <div class="hstack" style="justify-content:flex-start">
           ${avatar}
           <span>${esc(m.display_name || m.id)}</span>
-          <button class="copy-btn" data-id="${escAttr(m.id)}" onclick="copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>
+          <button class="copy-btn" data-id="${escAttr(m.id)}" data-stop data-action="copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>
           ${enabledBadge}
         </div>
         <div class="filter-hint" style="margin-top:2px"><code>${esc(m.id)}</code></div>

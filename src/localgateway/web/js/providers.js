@@ -7,11 +7,11 @@ async function loadProvidersPage() {
   await loadConfig();
 }
 async function loadConfig() {
-  try {
-    const { data } = await fetchJSON('/admin/config');
-    currentConfig = data;
-    renderProviders();
-  } catch(e) { console.error(e); }
+  resetLoadError();
+  const { ok, data } = await apiFetch('/admin/config');
+  if (!ok) { loadError('providers'); return; }
+  currentConfig = data;
+  renderProviders();
 }
 async function saveCurrentConfig() {
   try {
@@ -20,8 +20,12 @@ async function saveCurrentConfig() {
       body: JSON.stringify(currentConfig),
     });
     if (!r.ok) {
-      const err = await r.json().catch(()=>null);
-      toast('Error: ' + ((err&&err.error) || 'Validation failed'), 'error');
+      let msg = 'Validation failed';
+      try {
+        const err = await r.json();
+        msg = validationError(err) || msg;
+      } catch(_) {}
+      toast('Error: ' + msg, 'error');
       return false;
     }
     renderProviders();
@@ -76,7 +80,7 @@ async function revealEditKey(btn) {
   const pid = input.dataset.provider;
   if (input.type === 'password') {
     try {
-      const r = await fetch('/admin/config/api-key/' + encodeURIComponent(pid));
+      const r = await fetch('/admin/config/api-key/' + encodeURIComponent(pid) + '/reveal', { method: 'POST' });
       const d = await r.json();
       if (r.ok) { input.value = d.api_key || ''; input.type = 'text'; btn.textContent = 'hide'; }
       else toast('Cannot reveal: ' + (d.error || r.status), 'error');
@@ -154,9 +158,9 @@ function renderProviders() {
         + '<div class="form-row"><label>Name</label><input type="text" class="edit-name" value="'+esc(p.name||p.id)+'"></div>'
         + '<div class="form-row"><label>Avatar</label><input type="text" class="edit-avatar" value="'+esc(p.avatar||'')+'" placeholder="e.g. OG, GPT, ☁️" maxlength="8" title="Custom text for the avatar tile"></div>'
         + '<div class="form-row"><label>Base URL</label><input type="text" class="edit-url" value="'+esc(p.base_url)+'"></div>'
-        + '<div class="form-row"><label>API Key</label><div class="api-key-wrap"><input type="password" class="edit-key" value="" data-provider="'+escAttr(p.id)+'" placeholder="'+esc(p.api_key ? '•••••• (unchanged)' : 'no key set')+'" autocomplete="new-password"><button class="reveal-btn" onclick="revealEditKey(this)">show</button></div><div class="form-hint">Key is stored securely; leave blank to keep the current key, or type a new one.</div></div>'
+        + '<div class="form-row"><label>API Key</label><div class="api-key-wrap"><input type="password" class="edit-key" value="" data-provider="'+escAttr(p.id)+'" placeholder="'+esc(p.api_key ? '•••••• (unchanged)' : 'no key set')+'" autocomplete="new-password"><button class="reveal-btn" data-action="revealEditKey(this)">show</button></div><div class="form-hint">Key is stored securely; leave blank to keep the current key, or type a new one.</div></div>'
         + '<div class="form-row"><label>Timeout (s)</label><input type="number" class="edit-timeout" value="'+(p.timeout||120)+'"></div>'
-        + '<div class="actions"><button onclick="saveProviderEdit(this)">Save Changes</button><button class="secondary" onclick="cancelEditProvider(this)">Cancel</button></div>'
+        + '<div class="actions"><button data-action="saveProviderEdit(this)">Save Changes</button><button class="secondary" data-action="cancelEditProvider(this)">Cancel</button></div>'
         + '</div>';
     }
     const enabled = p.enabled !== false;
@@ -165,10 +169,10 @@ function renderProviders() {
       + '<div class="provider-info hstack">'+providerAvatar(p.id, 30, p.avatar)
       + '<span><span class="provider-name">'+esc(p.name||p.id)+'</span><code class="provider-id">'+esc(p.id)+'</code><div class="provider-url">'+esc(p.base_url)+'</div></span>'
       + '</div>'
-      + '<button class="icon-btn" data-id="'+escAttr(p.id)+'" onclick="discoverProvider(this.dataset.id)" title="Fetch models served by this provider">Discover</button>'
-      + '<button class="icon-btn" data-id="'+escAttr(p.id)+'" onclick="toggleEditProvider(this.dataset.id)">Edit</button>'
-      + '<button class="icon-btn '+(enabled?'danger':'success')+'" data-id="'+escAttr(p.id)+'" onclick="toggleProviderEnabled(this.dataset.id)" title="'+(enabled?'Disable provider':'Enable provider')+'">'+(enabled?'Disable':'Enable')+'</button>'
-      + '<button class="icon-btn danger" data-id="'+escAttr(p.id)+'" onclick="deleteProvider(this.dataset.id)">Delete</button>'
+      + '<button class="icon-btn" data-id="'+escAttr(p.id)+'" data-action="discoverProvider(this.dataset.id)" title="Fetch models served by this provider">Discover</button>'
+      + '<button class="icon-btn" data-id="'+escAttr(p.id)+'" data-action="toggleEditProvider(this.dataset.id)">Edit</button>'
+      + '<button class="icon-btn '+(enabled?'danger':'success')+'" data-id="'+escAttr(p.id)+'" data-action="toggleProviderEnabled(this.dataset.id)" title="'+(enabled?'Disable provider':'Enable provider')+'">'+(enabled?'Disable':'Enable')+'</button>'
+      + '<button class="icon-btn danger" data-id="'+escAttr(p.id)+'" data-action="deleteProvider(this.dataset.id)">Delete</button>'
       + disc
       + '</div>';
   }).join('');
@@ -184,15 +188,20 @@ function renderDiscovery(providerId) {
     const ctx = m.context_length ? ' · '+fmt(m.context_length,0)+' ctx' : '';
     return '<div class="provider-row discovery-row">'
       + '<div class="provider-info"><code>'+esc(m.id)+'</code><span class="provider-url" style="display:inline;margin-left:8px">'+esc(ctx)+'</span></div>'
-      + '<button class="icon-btn" data-provider="'+escAttr(providerId)+'" data-model="'+escAttr(m.id)+'" onclick="addDiscoveredModel(this.dataset.provider, this.dataset.model)">+ Add</button>'
+      + '<button class="icon-btn" data-provider="'+escAttr(providerId)+'" data-model="'+escAttr(m.id)+'" data-action="addDiscoveredModel(this.dataset.provider, this.dataset.model)">+ Add</button>'
       + '</div>';
   }).join('');
   return '<div class="form-section discovery-panel">'
     + '<div class="hstack" style="justify-content:space-between;margin-bottom:10px"><h2>Models on '+esc(providerId)+' ('+models.length+')</h2>'
-    + '<button class="secondary btn-sm" onclick="discoveryOpen=null;renderProviders()">Close</button></div>'
+    + '<button class="secondary btn-sm" data-action="closeDiscovery()">Close</button></div>'
     + '<div class="filter-hint" style="margin-bottom:10px">Adding creates a gateway model with the same ID (if missing) and attaches this provider at the next priority tier.</div>'
     + (rows || '<div class="empty">No models returned.</div>')
     + '</div>';
+}
+
+async function closeDiscovery() {
+  discoveryOpen = null;
+  renderProviders();
 }
 
 async function discoverProvider(id) {

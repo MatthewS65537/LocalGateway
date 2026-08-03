@@ -55,7 +55,12 @@ function populateProviderFilter() {
 async function loadModelsPage() {
   const loading = document.getElementById('models-loading');
   if (loading) loading.classList.remove('hidden');
-  if (!currentConfig) { try { currentConfig = (await fetchJSON('/admin/config')).data; } catch(e) {} }
+  resetLoadError();
+  if (!currentConfig) {
+    const { ok, data } = await apiFetch('/admin/config', { silent: true });
+    if (!ok) { loadError('models'); return; }
+    currentConfig = data;
+  }
   populateProviderFilter();
   try {
     const { ok, data } = await fetchJSON('/admin/models/overview?hours=168');
@@ -98,7 +103,7 @@ function renderModalityTabs() {
   el.innerHTML = tabs.map(t => {
     const cnt = counts[t.val] || 0;
     if (!t.val && cnt === 0) return '';
-    return '<button class="modality-tab'+(modalityFilter === t.val ? ' active' : '')+'" onclick="setModalityFilter(\''+t.val+'\')">'
+    return '<button class="modality-tab'+(modalityFilter === t.val ? ' active' : '')+'" data-action="setModalityFilter(\''+t.val+'\')">'
       + esc(t.label) + ' <span class="tab-count">'+cnt+'</span></button>';
   }).join('');
 }
@@ -194,7 +199,7 @@ function renderModelCatalog() {
   if (!models.length) {
     cardsEl.classList.remove('hidden');
     tableEl.classList.add('hidden');
-    cardsEl.innerHTML = '<div class="empty-state"><p>No models match your filters.</p><button class="primary" onclick="showAddModelModal()">Add a model</button></div>';
+    cardsEl.innerHTML = '<div class="empty-state"><p>No models match your filters.</p><button class="primary" data-action="showAddModelModal()">Add a model</button></div>';
     tableEl.innerHTML = '';
     return;
   }
@@ -207,7 +212,7 @@ function renderModelCatalog() {
       '</tr></thead><tbody>' +
       models.map(m => {
         const disabled = m.enabled === false;
-        return `<tr data-id="${escAttr(m.id)}" onclick="location.href='/models/'+encodeURIComponent(this.dataset.id)">` +
+        return `<tr data-id="${escAttr(m.id)}" data-nav="/models/{id}">` +
           `<td>${m.display_name ? esc(m.display_name)+' <code class="muted">'+esc(m.id)+'</code>' : '<code>'+esc(m.id)+'</code>'}` +
           (disabled ? ' <span class="badge badge-gray">off</span>' : '') + `</td>` +
           `<td>${m.modality ? '<span class="badge badge-purple">'+esc(m.modality)+'</span>' : '—'}</td>` +
@@ -236,8 +241,8 @@ function renderModelCatalog() {
     if (compareMode) {
       const selected = compareSelection.has(m.id);
       const canSelect = selected || compareSelection.size < 3;
-      return '<div class="row-card'+(canSelect ? '' : ' disabled')+'" data-id="'+escAttr(m.id)+'" onclick="toggleCompareSelection(this.dataset.id)">'
-        + '<input type="checkbox" class="rc-check" '+(selected?'checked':'')+(!canSelect?' disabled':'')+' data-id="'+escAttr(m.id)+'" onclick="toggleCompareSelection(this.dataset.id, event)">'
+      return '<div class="row-card'+(canSelect ? '' : ' disabled')+'" data-id="'+escAttr(m.id)+'" data-action="toggleCompareSelection(this.dataset.id)">'
+        + '<input type="checkbox" class="rc-check" '+(selected?'checked':'')+(!canSelect?' disabled':'')+' data-id="'+escAttr(m.id)+'" data-stop data-action="toggleCompareSelection(this.dataset.id, event)">'
         + '<div class="rc-left">'
         +   avatarHtml
         +   '<div>'
@@ -251,14 +256,14 @@ function renderModelCatalog() {
         + '</div></div>';
     }
 
-    return '<div class="row-card'+(disabled ? ' is-disabled' : '')+'" data-id="'+escAttr(m.id)+'" onclick="location.href=\'/models/\'+encodeURIComponent(this.dataset.id)">'
+    return '<div class="row-card'+(disabled ? ' is-disabled' : '')+'" data-id="'+escAttr(m.id)+'" data-nav="/models/{id}">'
       + '<div class="rc-left">'
       +   avatarHtml
       +   '<div>'
       +     '<div class="rc-title">'
       +       '<span class="rc-name">'+(m.display_name ? esc(m.display_name) : esc(m.id))+'</span>'
       +       '<span class="rc-slug">'+esc(m.id)+'</span>'
-      +       '<button class="copy-btn" data-id="'+escAttr(m.id)+'" onclick="event.stopPropagation();copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>'
+      +       '<button class="copy-btn" data-id="'+escAttr(m.id)+'" data-stop data-action="copyId(this.dataset.id,this)" title="Copy model ID">⧉</button>'
       +       modalityBadge + tagsHtml
       +       (disabled ? '<span class="badge badge-gray">disabled</span>' : '<span class="badge badge-blue">'+(m.backend_count||0)+' backend'+((m.backend_count||0)===1?'':'s')+'</span>')
       +     '</div>'
@@ -271,7 +276,7 @@ function renderModelCatalog() {
   if (compareMode && compareSelection.size >= 2) {
     const fab = document.createElement('div');
     fab.className = 'fab';
-    fab.innerHTML = '<button class="primary" onclick="showCompare()">Compare ' + compareSelection.size + ' models</button>';
+    fab.innerHTML = '<button class="primary" data-action="showCompare()">Compare ' + compareSelection.size + ' models</button>';
     cardsEl.appendChild(fab);
   }
 }
@@ -284,8 +289,8 @@ function showAddModelModal() {
     widthClass: 'modal-lg',
     bodyHtml: `
       <div class="seg" id="add-model-tabs" style="margin-bottom:14px">
-        <button type="button" class="active" data-tab="manual" onclick="switchAddModelTab('manual', this)">Manual</button>
-        <button type="button" data-tab="catalog" onclick="switchAddModelTab('catalog', this)">From provider</button>
+        <button type="button" class="active" data-tab="manual" data-action="switchAddModelTab('manual', this)">Manual</button>
+        <button type="button" data-tab="catalog" data-action="switchAddModelTab('catalog', this)">From provider</button>
       </div>
       <div id="add-manual">
         <div class="field"><label class="field-label">Model ID *</label><input type="text" id="new-model-id" placeholder="e.g. gpt-4o"></div>
@@ -297,7 +302,7 @@ function showAddModelModal() {
           <select id="discover-provider"><option value="">Select provider…</option>${providerOpts}</select>
         </div>
         <div class="field"><label class="field-label">Search</label>
-          <input type="text" id="discover-search" placeholder="Filter upstream models…" oninput="filterDiscoverList()">
+          <input type="text" id="discover-search" placeholder="Filter upstream models…" data-input="filterDiscoverList()">
         </div>
         <div id="discover-status" class="filter-hint" style="margin-bottom:8px"></div>
         <div id="discover-list" class="discover-list"></div>
@@ -307,8 +312,8 @@ function showAddModelModal() {
         <div class="field"><label class="field-label">Display Name</label><input type="text" id="new-model-name-cat"></div>
       </div>
       <div class="modal-actions">
-        <button class="secondary" onclick="closeModal()">Cancel</button>
-        <button class="primary" id="add-model-create" onclick="createModel(this)">Create</button>
+        <button class="secondary" data-action="closeModal()">Cancel</button>
+        <button class="primary" id="add-model-create" data-action="createModel(this)">Create</button>
       </div>`,
     onMount: (overlay) => {
       const sel = overlay.querySelector('#discover-provider');
@@ -360,7 +365,7 @@ function filterDiscoverList() {
   }
   list.innerHTML = filtered.slice(0, 100).map(m => {
     const id = typeof m === 'string' ? m : (m.id || '');
-    return `<div class="discover-row" data-id="${escAttr(id)}" onclick="pickDiscovered(this.dataset.id, this)"><code>${esc(id)}</code></div>`;
+    return `<div class="discover-row" data-id="${escAttr(id)}" data-action="pickDiscovered(this.dataset.id, this)"><code>${esc(id)}</code></div>`;
   }).join('');
 }
 

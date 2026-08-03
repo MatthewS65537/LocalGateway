@@ -48,22 +48,6 @@ class BackendConfig(BaseModel):
     cache_supported: bool | None = None
 
 
-class ModelConfig(BaseModel):
-    id: str
-    backends: list[BackendConfig] = Field(default_factory=list)
-    description: str | None = ""
-    context_length: int | None = None
-    enabled: bool = True
-    capabilities: dict[str, bool] = Field(default_factory=dict)
-    modality: str = ""
-    max_output_tokens: int | None = None
-    tags: list[str] = Field(default_factory=list)
-    aliases: list[str] = Field(default_factory=list)
-    default_params: dict[str, Any] = Field(default_factory=dict)
-    display_name: str = ""
-    avatar: str = ""  # custom avatar text; empty = first letter of id/display_name
-
-
 class TimeSlot(BaseModel):
     """A time window with active provider backends.
 
@@ -144,6 +128,8 @@ _config_lock = threading.RLock()
 _config: GatewayConfig | None = None
 _config_path: Path = Path("config.json")
 _config_mtime: float = -1.0
+BACKUP_KEEP = 5
+_config_recovered: str | None = None  # path of the backup used for the current config
 
 
 def set_config_path(path: str | Path) -> None:
@@ -160,6 +146,61 @@ def _file_mtime() -> float:
 
 def _backup_path() -> Path:
     return _config_path.with_suffix(_config_path.suffix + ".bak")
+
+
+def _backup_paths() -> list[Path]:
+    """Newest-first backup paths: config.json.bak, config.json.bak.1, ... """
+    paths = [_backup_path()]
+    for i in range(1, BACKUP_KEEP):
+        paths.append(_config_path.with_suffix(f"{_config_path.suffix}.bak.{i}"))
+    return paths
+
+
+def _backup_at(i: int) -> Path:
+    """Backup at slot i: 0 -> .bak, 1 -> .bak.1, ... """
+    if i == 0:
+        return _backup_path()
+    return _config_path.with_suffix(f"{_config_path.suffix}.bak.{i}")
+
+
+def _rotate_backups() -> None:
+    """Shift existing backups up one slot and drop the oldest beyond BACKUP_KEEP.
+
+    Called before config.json is renamed into slot 0, so the chain
+    (.bak -> .bak.1 -> .bak.2 -> ...) preserves up to BACKUP_KEEP generations.
+    """
+    # Drop the oldest slot beyond the keep count (slot BACKUP_KEEP).
+    try:
+        extra = _backup_at(BACKUP_KEEP)
+        if extra.exists():
+            extra.unlink()
+    except OSError:
+        pass
+    # Shift .bak.{k} -> .bak.{k+1} for k = BACKUP_KEEP-2 .. 0 (oldest first).
+    # Slot BACKUP_KEEP is dropped above and never refilled.
+    for i in range(BACKUP_KEEP - 2, -1, -1):
+        src = _backup_at(i)
+        dst = _backup_at(i + 1)
+        try:
+            if src.exists():
+                if dst.exists():
+                    dst.unlink()
+                src.rename(dst)
+        except OSError:
+            pass
+
+
+def last_good_backup() -> Path | None:
+    """Newest readable backup, or None."""
+    for p in _backup_paths():
+        if p.exists():
+            return p
+    return None
+
+
+def config_recovered_from() -> str | None:
+    """Path of the backup currently serving as config, if recovery happened."""
+    return _config_recovered
 
 
 def _parse(raw: dict) -> GatewayConfig:
@@ -179,45 +220,52 @@ def load_config() -> GatewayConfig:
     picks up changes automatically. On corrupt JSON, falls back to the last-good
     .bak file, then to an empty config, so the gateway always starts.
     """
-    global _config, _config_mtime
+    global _config, _config_mtime, _config_recovered
     with _config_lock:
         mtime = _file_mtime()
         if _config is None or mtime != _config_mtime:
             candidates = []
             if _config_path.exists():
                 candidates.append(_config_path)
-            bak = _backup_path()
-            if bak.exists():
-                candidates.append(bak)
+            for bak in _backup_paths():
+                if bak.exists():
+                    candidates.append(bak)
 
             loaded = None
+            used_backup: str | None = None
             for path in candidates:
                 try:
                     raw = json.loads(path.read_text(encoding="utf-8"))
                     loaded = _parse(raw)
+                    if path != _config_path:
+                        used_backup = str(path)
                     break
                 except (json.JSONDecodeError, ValueError, OSError) as e:
                     logs_fallback = f"config parse failed for {path}: {e}"
                     try:
                         from . import logs as _logs
-                        _logs.info(logs_fallback, provider="config")
+                        _logs.error(logs_fallback, provider="config")
                     except Exception:
                         pass
                     continue
 
+            if loaded is None:
+                used_backup = None
             _config = loaded if loaded is not None else GatewayConfig()
+            _config_recovered = used_backup
             _config_mtime = mtime
         return _config
 
 
 def save_config(cfg: GatewayConfig) -> None:
-    global _config, _config_mtime
+    global _config, _config_mtime, _config_recovered
     with _config_lock:
         cfg.version += 1
         data = json.dumps(cfg.model_dump(), indent=2, ensure_ascii=False)
-        # Preserve previous good copy before overwriting (atomic via os.replace).
+        # Rotate backups before overwriting (atomic via os.replace).
         if _config_path.exists():
             try:
+                _rotate_backups()
                 _config_path.rename(_backup_path())
             except OSError:
                 pass
@@ -225,6 +273,7 @@ def save_config(cfg: GatewayConfig) -> None:
         tmp.write_text(data, encoding="utf-8")
         os.replace(tmp, _config_path)
         _config = cfg
+        _config_recovered = None  # a clean save clears any recovery state
         _config_mtime = _file_mtime()
 
 

@@ -12,9 +12,9 @@ async function loadLogs() {
   let url = '/admin/logs?limit=200';
   if (level) url += '&level=' + encodeURIComponent(level);
   if (search) url += '&search=' + encodeURIComponent(search);
-  try {
-    const { data } = await fetchJSON(url);
-    const logs = (data && data.logs) || [];
+  const { ok, data } = await apiFetch(url, { silent: true });
+  if (!ok) { loadError('logs'); return; }
+  const logs = (data && data.logs) || [];
     const el = document.getElementById('log-list');
     if (logs.length === 0) {
       el.innerHTML = '<div class="empty">No log entries.</div>';
@@ -37,7 +37,6 @@ async function loadLogs() {
         + '<span class="log-meta">'+esc(meta)+'</span>'
         + '</div>';
     }).join('');
-  } catch(e) { console.error(e); }
 }
 function toggleLogAutoRefresh() {
   setupLogTimer();

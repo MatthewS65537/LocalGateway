@@ -17,6 +17,130 @@ async function fetchJSON(url, opts) {
   try { data = await r.json(); } catch(_) {}
   return { ok: r.ok, status: r.status, data };
 }
+
+// Extract a human-readable message from a FastAPI 422 detail body.
+function validationError(data) {
+  if (!data) return null;
+  if (data.error && typeof data.error === 'string' && !data.detail) return data.error;
+  if (data.error && typeof data.error === 'string') return data.error;
+  const detail = data.detail || (data.error && data.error.detail);
+  if (Array.isArray(detail) && detail.length) {
+    const first = detail[0];
+    const loc = (first.loc || []).slice(1).join('.');
+    const msg = first.msg || 'Invalid value';
+    return loc ? `${loc}: ${msg}` : msg;
+  }
+  if (typeof detail === 'string') return detail;
+  if (typeof data.detail === 'string') return data.detail;
+  return null;
+}
+
+// Uniform data fetch: like fetchJSON but never throws — transport failures and
+// auth errors surface as toasts (deduped per page) instead of silent catches.
+// Pass { silent: true } for background polling where a toast would spam.
+let _loadErrorShown = false;
+function resetLoadError() { _loadErrorShown = false; }
+function loadError(what) {
+  if (_loadErrorShown) return;
+  _loadErrorShown = true;
+  toast('Could not load ' + what + '. Check the server and refresh.', 'error');
+}
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  try {
+    const r = await fetchJSON(url, opts);
+    if (r.status === 401 || r.status === 403) {
+      if (!opts.silent) toast('Not authorized for this action', 'error');
+      return { ok: false, status: r.status, data: null };
+    }
+    return r;
+  } catch (e) {
+    if (!opts.silent) toast('Network error: ' + e.message, 'error');
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+// ---------- inline-action dispatcher (CSP-safe) ----------
+// Replaces `onclick="fn(args)"` with `data-action="fn(args)"` so a strict
+// Content-Security-Policy (script-src 'self') can be enforced. The spec is
+// parsed with a restricted grammar — a function name plus JSON literals and
+// whitelisted tokens — never eval'd. Navigation goes through `data-nav` with
+// `{id}` / `{provider}` / `{model}` interpolation.
+const _ACTION_TOKENS = {
+  'this': 'el',
+  'event': 'event',
+  'this.value': 'value',
+  'this.dataset.id': 'id',
+  'this.dataset.provider': 'provider',
+  'this.dataset.model': 'model',
+  'this.dataset.slot': 'slot',
+  'this.parentElement': 'parent',
+};
+
+function _parseActionArg(raw, el, event) {
+  raw = raw.trim();
+  if (raw === '') return { ok: false };
+  const key = _ACTION_TOKENS[raw];
+  if (key !== undefined) {
+    const ctx = { el, event, value: el.value, id: el.dataset.id, provider: el.dataset.provider, model: el.dataset.model, slot: el.dataset.slot, parent: el.parentElement };
+    return { ok: true, value: ctx[key] };
+  }
+  const q = raw[0];
+  if (q === "'" || q === '"') {
+    const body = raw.slice(1);
+    if (body.length === 0 || body[body.length - 1] !== q) return { ok: false };
+    return { ok: true, value: body.slice(0, -1).replace(/\\(.)/g, '$1') };
+  }
+  try { return { ok: true, value: JSON.parse(raw) }; } catch(_) { return { ok: false }; }
+}
+
+function _dispatchAction(el, event, spec) {
+  if (!spec) return;
+  spec = String(spec).trim();
+  const m = spec.match(/^([A-Za-z_$][\w$]*)(?:\((.*)\))?$/);
+  if (!m) return;
+  const fn = window[m[1]];
+  if (typeof fn !== 'function') return;
+  const args = [];
+  if (m[2] != null && m[2].trim() !== '') {
+    for (const raw of m[2].split(',')) {
+      const r = _parseActionArg(raw, el, event);
+      if (!r.ok) return;
+      args.push(r.value);
+    }
+  }
+  fn.apply(el, args);
+}
+
+function _navTarget(el) {
+  const nav = el.dataset.nav;
+  if (!nav) return null;
+  return nav
+    .replace(/\{id\}/g, encodeURIComponent(el.dataset.id || ''))
+    .replace(/\{provider\}/g, encodeURIComponent(el.dataset.provider || ''))
+    .replace(/\{model\}/g, encodeURIComponent(el.dataset.model || ''));
+}
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action], [data-nav]');
+  if (!el) return;
+  if (el.hasAttribute('data-stop')) e.stopPropagation();
+  const nav = _navTarget(el);
+  if (nav) { e.preventDefault(); location.href = nav; return; }
+  if (el.hasAttribute('data-action')) {
+    e.preventDefault();
+    _dispatchAction(el, e, el.dataset.action);
+  }
+});
+document.addEventListener('change', (e) => {
+  const el = e.target.closest('[data-change]');
+  if (el) _dispatchAction(el, e, el.dataset.change);
+});
+document.addEventListener('input', (e) => {
+  const el = e.target.closest('[data-input]');
+  if (el) _dispatchAction(el, e, el.dataset.input);
+});
+
 function fmt(n, d=2) { return (n || 0).toLocaleString(undefined, {maximumFractionDigits: d}); }
 function fmtCost(n) { return '$' + fmt(n, 4); }
 function fmtPrice(p) {
@@ -111,7 +235,7 @@ function toast(message, type='info', timeout=3800) {
   const container = document.getElementById('toast-container');
   const el = document.createElement('div');
   el.className = 'toast ' + type;
-  el.innerHTML = '<div class="toast-icon">'+(TOAST_ICONS[type]||'i')+'</div><div class="toast-body">'+esc(message)+'</div><button class="toast-close" onclick="dismissToast(this.parentElement)">&times;</button>';
+  el.innerHTML = '<div class="toast-icon">'+(TOAST_ICONS[type]||'i')+'</div><div class="toast-body">'+esc(message)+'</div><button class="toast-close" data-action="dismissToast(this.parentElement)" aria-label="Dismiss">&times;</button>';
   container.appendChild(el);
   if (timeout) setTimeout(() => dismissToast(el), timeout);
 }
@@ -122,15 +246,28 @@ function dismissToast(el) {
 }
 
 let _activeModal = null;
+let _lastFocused = null;
 function closeModal(overlay) {
   const el = overlay || _activeModal;
   if (!el) return;
   el.remove();
   if (_activeModal === el) _activeModal = null;
   document.removeEventListener('keydown', _modalEscHandler);
+  document.removeEventListener('keydown', _modalTrapHandler);
+  if (_lastFocused && _lastFocused.isConnected) _lastFocused.focus();
+  _lastFocused = null;
 }
 function _modalEscHandler(e) {
   if (e.key === 'Escape') closeModal();
+}
+function _modalTrapHandler(e) {
+  if (e.key !== 'Tab' || !_activeModal) return;
+  const focusable = _activeModal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 /**
  * Open a shared modal. opts: { title, bodyHtml, widthClass, onMount }
@@ -138,6 +275,7 @@ function _modalEscHandler(e) {
  */
 function openModal({ title = '', bodyHtml = '', widthClass = '', onMount = null } = {}) {
   closeModal();
+  _lastFocused = document.activeElement;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.setAttribute('role', 'dialog');
@@ -151,6 +289,7 @@ function openModal({ title = '', bodyHtml = '', widthClass = '', onMount = null 
   _activeModal = overlay;
   overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(overlay); });
   document.addEventListener('keydown', _modalEscHandler);
+  document.addEventListener('keydown', _modalTrapHandler);
   const focusable = overlay.querySelector('input, select, textarea, button');
   if (focusable) focusable.focus();
   if (onMount) onMount(overlay);
@@ -203,6 +342,17 @@ function updateServerUI() {
   }
   const dp = document.getElementById('dash-port-input');
   if (dp && serverStatus.port != null) dp.value = serverStatus.port;
+
+  // Config-recovery warning: a corrupt config.json was replaced by a backup.
+  const recBadge = document.getElementById('config-recovered-badge');
+  if (recBadge) {
+    if (serverStatus.config_recovered) {
+      recBadge.classList.remove('hidden');
+      recBadge.title = 'config.json was unreadable; running from ' + serverStatus.config_recovered;
+    } else {
+      recBadge.classList.add('hidden');
+    }
+  }
 
   for (const prefix of ['dash', 'log']) {
     const start = document.getElementById(prefix + '-start');
@@ -352,6 +502,11 @@ async function saveConfigSection(mutate, { maxRetries = 2, onConflict = null } =
       continue; // re-GET on next iteration and retry
     }
     if (put.ok) invalidatePalette();
+    else if (put.status === 422) {
+      const msg = validationError(put.data);
+      toast(msg ? 'Validation failed: ' + msg : 'Failed to save changes', 'error');
+      return { ok: false, status: put.status };
+    }
     return { ok: put.ok, status: put.status };
   }
   toast('Config kept changing; please retry.', 'error');
