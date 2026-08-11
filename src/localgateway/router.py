@@ -248,8 +248,14 @@ def select_backends(
                 effective = model_cap
             if effective is not None and effective < max_tokens:
                 continue
-        if input_tokens is not None and b.context_length is not None and b.context_length < input_tokens:
-            continue
+        if input_tokens is not None and b.context_length is not None:
+            # Context fit includes the output budget: input + max_tokens must
+            # fit, otherwise the request fails mid-generation upstream. This
+            # filter runs before the cache-affinity banding below, so a warm
+            # backend whose context window is too small is infeasible — cache
+            # warmth never wins over context capacity.
+            if b.context_length < input_tokens + (max_tokens or 0):
+                continue
         if active_slot is not None:
             from .time_routing import filter_backends_for_slot
             if not filter_backends_for_slot([(b.provider, b.model)], active_slot):

@@ -19,6 +19,7 @@ from ..provider import call_provider, call_provider_stream, StreamChunk, StreamD
 from ..router import ProviderPrefs, select_backends
 from ..streaming import (
     _provider_headers, _strip_gateway_fields, _compute_cost, _estimate_input_tokens,
+    _requested_max_tokens, _context_too_small_error,
     apply_default_params, fingerprint, resolve_request_id,
 )
 from ..sse import SSEParser, StreamUsage
@@ -150,10 +151,18 @@ async def create_response(request: Request):
     body = apply_default_params(body, model_cfg.default_params)
     upstream_body = _strip_gateway_fields(body)
     input_tokens = _estimate_input_tokens(body, config)
+    max_tokens = _requested_max_tokens(body)
     cache_key = fingerprint(body)
 
-    backends = list(select_backends(config, logical_model, input_tokens=input_tokens, prefs=prefs, cache_key=cache_key))
+    backends = list(select_backends(config, logical_model, max_tokens=max_tokens, input_tokens=input_tokens, prefs=prefs, cache_key=cache_key))
     if not backends:
+        ctx_err = _context_too_small_error(config, model_cfg, input_tokens, max_tokens)
+        if ctx_err is not None:
+            return JSONResponse(
+                {"error": ctx_err},
+                status_code=400,
+                headers={"X-Request-Id": request_id},
+            )
         return JSONResponse(
             {"error": {
                 "message": f"Model '{logical_model}' not found or has no configured backends",

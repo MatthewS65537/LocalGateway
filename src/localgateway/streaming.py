@@ -193,13 +193,44 @@ def _error_sse(message: str, code: str) -> bytes:
 
 
 def _requested_max_tokens(request_body: dict) -> int | None:
+    # max_completion_tokens (chat), max_tokens (chat/legacy), max_output_tokens
+    # (Responses API). First present wins; chat bodies never set the last one.
     mt = request_body.get("max_completion_tokens")
     if mt is None:
         mt = request_body.get("max_tokens")
+    if mt is None:
+        mt = request_body.get("max_output_tokens")
     try:
         return int(mt) if mt is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _context_too_small_error(
+    config: GatewayConfig, model_cfg, input_tokens: int | None, max_tokens: int | None
+) -> dict | None:
+    """Error dict when prompt+completion can't fit ANY enabled backend's
+    context window, else None. Distinguishes context-filter empties from
+    "model not found" so clients get an actionable 400."""
+    if input_tokens is None or model_cfg is None:
+        return None
+    contexts = [
+        b.context_length
+        for b in model_cfg.backends
+        if b.enabled and b.context_length is not None
+        and (p := config.provider_by_id(b.provider)) and p.enabled
+    ]
+    needed = input_tokens + (max_tokens or 0)
+    if contexts and needed > max(contexts):
+        return {
+            "message": (
+                f"Prompt + requested completion ({needed} tokens) exceeds the "
+                f"largest backend context for '{model_cfg.id}' ({max(contexts)})"
+            ),
+            "type": "invalid_request_error",
+            "code": "context_length_exceeded",
+        }
+    return None
 
 
 # Params safe to inherit from model.default_params. Client values always win.
@@ -306,6 +337,10 @@ def _resolve_backends(
     )
     if backends:
         return backends, None, 0
+
+    ctx_err = _context_too_small_error(config, model, input_tokens, max_tokens)
+    if ctx_err is not None:
+        return [], ctx_err, 400
 
     if max_tokens is not None:
         limits = [
