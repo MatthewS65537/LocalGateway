@@ -34,3 +34,6 @@ htmlcov/
 
 # Plans (generated)
 plans/
+
+# Node (JS test harness)
+node_modules/

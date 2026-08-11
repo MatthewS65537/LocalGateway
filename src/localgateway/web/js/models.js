@@ -4,6 +4,14 @@ let compareMode = false;
 let compareSelection = new Set();
 let catalogView = localStorage.getItem('lg-catalog-view') || 'cards';
 let modalityFilter = '';
+let _catalogRenderDebounce = null;
+
+// Perf: the search/min-ctx/max-price inputs re-rendered the whole catalog on
+// every keystroke (full cards/table DOM rebuild). Debounce like logs.js does.
+function debouncedRenderCatalog() {
+  clearTimeout(_catalogRenderDebounce);
+  _catalogRenderDebounce = setTimeout(renderModelCatalog, 200);
+}
 
 function setCatalogView(view, btn) {
   catalogView = view;
@@ -80,7 +88,7 @@ async function loadModelsPage() {
 function _modalityCounts() {
   const cfgModels = (currentConfig && currentConfig.models) || [];
   const base = modelsOverview || cfgModels.map(m => ({ id: m.id, modality: m.modality }));
-  const counts = { '': 0, 'text': 0, 'text+vision': 0, 'multimodal': 0 };
+  const counts = { '': 0, 'text': 0, 'multimodal': 0 };
   base.forEach(m => {
     const mod = m.modality || '';
     counts[''] = (counts[''] || 0) + 1;
@@ -97,7 +105,6 @@ function renderModalityTabs() {
   const tabs = [
     { val: '', label: 'All' },
     { val: 'text', label: 'Text' },
-    { val: 'text+vision', label: 'Text + Vision' },
     { val: 'multimodal', label: 'Multimodal' },
   ];
   el.innerHTML = tabs.map(t => {
@@ -158,7 +165,7 @@ function _filteredModels() {
   if (capabilityFilter) models = models.filter(m => m.capabilities && m.capabilities[capabilityFilter]);
 
   const minCtx = parseInt(document.getElementById('filter-min-ctx').value);
-  if (minCtx) models = models.filter(m => (m.context_length || 0) >= minCtx);
+  if (minCtx) models = models.filter(m => (m.context_min || 0) >= minCtx);
 
   const maxPrice = parseFloat(document.getElementById('filter-max-price').value);
   if (maxPrice) models = models.filter(m => m.input_price != null && m.input_price <= maxPrice / 1e6);
@@ -168,16 +175,21 @@ function _filteredModels() {
     if (sort === 'name') return a.id.localeCompare(b.id);
     if (sort === 'tps') return (b.tps_p50 || 0) - (a.tps_p50 || 0);
     if (sort === 'price') return (a.input_price || Infinity) - (b.input_price || Infinity);
-    if (sort === 'context') return (b.context_length || 0) - (a.context_length || 0);
+    if (sort === 'context') return (b.context_max || b.context_length || 0) - (a.context_max || a.context_length || 0);
     return (b.tokens || 0) - (a.tokens || 0);
   });
   return models;
 }
 
+function _ctxStr(m) {
+  if (m.context_min != null && m.context_max != null) {
+    return m.context_min === m.context_max ? fmtTokens(m.context_min) : fmtTokens(m.context_min) + '–' + fmtTokens(m.context_max);
+  }
+  return m.context_length ? fmtTokens(m.context_length) : '—';
+}
+
 function _rcStats(m) {
-  const ctxStr = (m.context_min != null && m.context_max != null)
-    ? (m.context_min === m.context_max ? fmtTokens(m.context_min) : fmtTokens(m.context_min)+'–'+fmtTokens(m.context_max))
-    : (m.context_length ? fmtTokens(m.context_length) : '—');
+  const ctxStr = _ctxStr(m);
   const priceStr = m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—';
   return [
     '<div class="rc-stat rc-w-ctx"><div class="v">'+esc(ctxStr)+'</div><div class="l">Context</div></div>',
@@ -212,11 +224,11 @@ function renderModelCatalog() {
       '</tr></thead><tbody>' +
       models.map(m => {
         const disabled = m.enabled === false;
-        return `<tr data-id="${escAttr(m.id)}" data-nav="/models/{id}">` +
+        return `<tr data-id="${escAttr(m.id)}" data-nav="/models/{id}" tabindex="0" role="link" aria-label="Open ${escAttr(m.display_name || m.id)}">` +
           `<td>${m.display_name ? esc(m.display_name)+' <code class="muted">'+esc(m.id)+'</code>' : '<code>'+esc(m.id)+'</code>'}` +
           (disabled ? ' <span class="badge badge-gray">off</span>' : '') + `</td>` +
           `<td>${m.modality ? '<span class="badge badge-purple">'+esc(m.modality)+'</span>' : '—'}</td>` +
-          `<td>${m.context_length ? fmtTokens(m.context_length) : '—'}</td>` +
+          `<td>${esc(_ctxStr(m))}</td>` +
           `<td>${m.tps_p50 != null ? fmt(m.tps_p50, 0) : '—'}</td>` +
           `<td>${fmtTokens(m.tokens)}</td>` +
           `<td>${fmtCost(m.cost)}</td>` +
@@ -251,12 +263,12 @@ function renderModelCatalog() {
         +   '</div>'
         + '</div>'
         + '<div class="rc-right">'
-        +   '<div class="rc-stat rc-w-ctx"><div class="v">'+esc(m.context_length ? fmtTokens(m.context_length) : '—')+'</div><div class="l">Context</div></div>'
+        +   '<div class="rc-stat rc-w-ctx"><div class="v">'+esc(_ctxStr(m))+'</div><div class="l">Context</div></div>'
         +   '<div class="rc-stat rc-w-price"><div class="v">'+(m.input_price != null ? fmtPrice(m.input_price)+' / '+fmtPrice(m.output_price) : '—')+'</div><div class="l">In / Out</div></div>'
         + '</div></div>';
     }
 
-    return '<div class="row-card'+(disabled ? ' is-disabled' : '')+'" data-id="'+escAttr(m.id)+'" data-nav="/models/{id}">'
+    return '<div class="row-card'+(disabled ? ' is-disabled' : '')+'" data-id="'+escAttr(m.id)+'" data-nav="/models/{id}" tabindex="0" role="link" aria-label="Open '+escAttr(m.display_name || m.id)+'">'
       + '<div class="rc-left">'
       +   avatarHtml
       +   '<div>'

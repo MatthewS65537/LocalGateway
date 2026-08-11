@@ -3,15 +3,35 @@
     "host": "127.0.0.1",
     "port": 3456,
     "api_key": null,
+    "api_keys": [
+      {
+        "id": "home-agent",
+        "key": "REPLACE_WITH_A_CLIENT_KEY",
+        "label": "My home assistant",
+        "enabled": true,
+        "rpm": 60,
+        "daily_budget_usd": 1.0,
+        "monthly_budget_usd": null,
+        "model_allowlist": []
+      }
+    ],
     "routing_mode": "explore",
     "routing_decay": 0.75,
+    "stats_routing_enabled": true,
+    "circuit_breaker_enabled": true,
+    "circuit_breaker_threshold": 3,
+    "circuit_breaker_backoff_s": 60.0,
     "probe_enabled": true,
     "probe_interval_s": 3600.0,
     "probe_max_tokens": 64,
     "chart_enabled": false,
     "cache_affinity_enabled": false,
     "cache_affinity_ttl_sec": 300,
-    "max_inflight_before_spill": null
+    "max_inflight_before_spill": null,
+    "usage_retention_days": 30,
+    "log_retention_lines": 10000,
+    "tokenizer": "auto",
+    "alert_webhook_url": null
   },
   "providers": [
     {
@@ -54,6 +74,7 @@
       },
       "modality": "text",
       "max_output_tokens": null,
+      "endpoint": "chat",
       "tags": [],
       "aliases": ["my-model-alias"],
       "default_params": {},
@@ -74,10 +95,29 @@
           }
         ]
       }
+    },
+    {
+      "id": "my-embedder",
+      "endpoint": "embeddings",
+      "description": "Example embeddings model (POST /v1/embeddings).",
+      "backends": [
+        {
+          "provider": "my-provider",
+          "model": "some-embedding-model",
+          "priority": 1,
+          "enabled": true
+        }
+      ]
     }
   ],
   "pricing": {
     "my-provider:upstream-model-name": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": null,
+      "cache_write": null
+    },
+    "my-provider:some-embedding-model": {
       "input": 0.0,
       "output": 0.0,
       "cache_read": null,

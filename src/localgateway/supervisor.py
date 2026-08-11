@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import logs
-from .auth import check_api_key, is_loopback_host, is_page_path
+from .auth import check_api_key, is_loopback_host, is_page_path, resolve_api_key
 from .config import config_recovered_from, load_config, set_config_path
 from .usage import set_db_path
 from .endpoints.admin import router as admin_router
@@ -59,7 +59,27 @@ class Supervisor:
             self.proc = subprocess.Popen(cmd)
             self.started_at = time.time()
             logs.info("Gateway started", provider="supervisor", pid=self.proc.pid)
+            # P9: wait (briefly) until the worker actually serves before
+            # returning, so start/restart feel atomic — previously start()
+            # returned before the worker bound its port and the first ~1s of
+            # requests got 503 "worker unreachable".
+            self._wait_ready(timeout=15.0)
             return {"status": "started", "pid": self.proc.pid}
+
+    def _wait_ready(self, timeout: float) -> bool:
+        """Poll the worker's /v1/models until it answers (or the process dies)."""
+        deadline = time.time() + timeout
+        url = f"{self.worker_base()}/v1/models"
+        with httpx.Client(timeout=1.0) as probe:
+            while time.time() < deadline:
+                if self.proc is not None and self.proc.poll() is not None:
+                    return False
+                try:
+                    probe.get(url)
+                    return True
+                except Exception:
+                    time.sleep(0.2)
+        return False
 
     def stop(self) -> dict:
         with self.lock:
@@ -96,7 +116,15 @@ class Supervisor:
 
 
 def create_supervisor_app(sup: Supervisor) -> FastAPI:
-    app = FastAPI(title="LocalGateway Supervisor")
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        sup.stop()
+        await client.aclose()
+
+    app = FastAPI(title="LocalGateway Supervisor", lifespan=lifespan)
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(300.0, connect=5.0),
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
@@ -164,10 +192,8 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
             return await call_next(request)
         if path.startswith("/v1") or path.startswith("/api/v1"):
             cfg = load_config()
-            if cfg.server.api_key:
-                auth = request.headers.get("Authorization", "")
-                token = auth.replace("Bearer ", "").strip() if auth.startswith("Bearer") else auth
-                if token != cfg.server.api_key:
+            if cfg.server.api_key or cfg.server.api_keys:
+                if resolve_api_key(request, cfg) is None:
                     return JSONResponse(
                         {"error": {"message": "Invalid API key", "type": "authentication_error"}},
                         status_code=401,
@@ -176,6 +202,61 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
 
     # Jinja2-templated pages + /static (from endpoints/web.py)
     app.include_router(web_router)
+
+    # --- Live-state admin endpoints: proxy to the worker when running.
+    # In-memory registries (stats, circuits, warmth, rate-limits) live in the
+    # worker subprocess. The supervisor mounts admin_router (below) so config,
+    # logs, and backups remain editable while the gateway is stopped — but
+    # that means live-state endpoints served by the supervisor return empty
+    # data ({}, null) because the supervisor's own module state is unused.
+    # These explicit routes (registered before admin_router so they match
+    # first) forward to the worker when running, and fall back to the local
+    # admin handler (degraded but correct shape) when stopped.
+    def _make_live_proxy(method: str, path: str, fn_name: str,
+                         takes_request: bool = False):
+        async def _handler(request: Request):
+            if sup.is_running():
+                try:
+                    url = f"{sup.worker_base()}{path}"
+                    if request.url.query:
+                        url += f"?{request.url.query}"
+                    if method == "GET":
+                        r = await client.get(url)
+                    else:
+                        body = await request.body()
+                        headers = {
+                            k: v for k, v in request.headers.items()
+                            if k.lower() not in HOP_BY_HOP
+                        }
+                        r = await client.request(method, url,
+                                                 headers=headers, content=body)
+                    resp_headers = {
+                        k: v for k, v in r.headers.items()
+                        if k.lower() not in RESP_STRIP
+                    }
+                    return Response(content=r.content, status_code=r.status_code,
+                                    headers=resp_headers)
+                except Exception:
+                    pass  # worker unreachable — fall through to local handler
+            from .endpoints import admin as _admin
+            fn = getattr(_admin, fn_name)
+            if takes_request:
+                return await fn(request)
+            return await fn()
+        _handler.__name__ = f"_live_proxy_{fn_name}"
+        return _handler
+
+    for _m, _p, _fn, _tr in [
+        ("GET", "/admin/health", "health_endpoint", False),
+        ("GET", "/admin/rate-limits", "rate_limits_endpoint", False),
+        ("GET", "/admin/inflight", "inflight_endpoint", False),
+        ("GET", "/admin/warmth", "get_warmth", False),
+        ("DELETE", "/admin/warmth", "clear_warmth", False),
+        ("GET", "/admin/circuit", "circuit_snapshot", False),
+        ("POST", "/admin/circuit/reset", "circuit_reset", True),
+    ]:
+        app.add_api_route(_p, _make_live_proxy(_m, _p, _fn, _tr), methods=[_m])
+
     # All /admin routes come from the worker's canonical admin_router (single
     # source of truth), so fields like `avatar` never drift between ports.
     app.include_router(admin_router)
@@ -192,6 +273,11 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
         status = sup.status()
         recovered = config_recovered_from()
         status["config_recovered"] = recovered
+        try:
+            from .usage import get_active_anomalies
+            status["anomalies"] = get_active_anomalies()
+        except Exception:
+            status["anomalies"] = []
         return JSONResponse(status)
 
     @app.post("/admin/server/start")
@@ -205,22 +291,6 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
     @app.post("/admin/server/restart")
     async def server_restart():
         return JSONResponse(sup.restart())
-
-    @app.get("/admin/logs")
-    async def get_logs(
-        limit: int = 200,
-        level: str | None = None,
-        search: str | None = None,
-        since_id: int | None = None,
-    ):
-        return JSONResponse({
-            "logs": logs.get_logs(limit=limit, level=level, search=search, since_id=since_id)
-        })
-
-    @app.delete("/admin/logs")
-    async def clear_logs():
-        logs.clear_logs()
-        return JSONResponse({"status": "ok"})
 
     @app.api_route(
         "/{path:path}",
@@ -247,36 +317,37 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
             k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP
         }
 
+        # SSE-producing API paths. Gate on the path so non-streaming admin
+        # endpoints aren't misdetected as SSE proxies. /v1/responses streams
+        # the same way as /chat/completions (responses.py emits SSE events).
+        # /admin/events is the L1 SSE bus (GET, no body) — needs streaming.
         wants_stream = False
-        if body and not path.startswith("admin/"):
-            try:
-                wants_stream = bool(json.loads(body).get("stream"))
-            except Exception:
-                pass
+        if path == "admin/events":
+            wants_stream = True
+        elif body and not path.startswith("admin/"):
+            if path.endswith("chat/completions") or path.endswith("/responses"):
+                try:
+                    wants_stream = bool(json.loads(body).get("stream"))
+                except Exception:
+                    pass
 
         try:
             if wants_stream:
-                response = StreamingResponse(
-                    gen(),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-                )
-
                 async def gen():
                     async with client.stream(
                         request.method, url, headers=headers, content=body
                     ) as r:
-                        # Mirror the worker's disclosure headers (X-Provider /
-                        # X-Backend) so streaming clients on the supervisor see
-                        # which provider served the request. Starlette serializes
-                        # headers only when iteration begins, so mutating them
-                        # here before the first yield is safe.
                         for k, v in r.headers.items():
                             if k.lower() not in RESP_STRIP:
                                 response.headers[k] = v
                         async for chunk in r.aiter_bytes():
                             yield chunk
 
+                response = StreamingResponse(
+                    gen(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
                 return response
 
             r = await client.request(request.method, url, headers=headers, content=body)
@@ -296,11 +367,6 @@ def create_supervisor_app(sup: Supervisor) -> FastAPI:
                 status_code=503,
             )
 
-    @app.on_event("shutdown")
-    async def shutdown():
-        sup.stop()
-        await client.aclose()
-
     return app
 
 
@@ -309,6 +375,8 @@ def run_supervisor(config_path: str, host: str, port: int) -> None:
     set_config_path(config_path)
     set_db_path("data/usage.db")
     logs.set_db_path("data/usage.db")
+    from . import respcache
+    respcache.set_db_path("data/usage.db")
     cfg = load_config()
     if not is_loopback_host(host) and not cfg.server.api_key:
         logs.warn(

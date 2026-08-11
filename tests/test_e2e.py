@@ -15,6 +15,20 @@ def _msg(events):
 
 # ---------- chat: non-streaming ----------
 
+async def test_non_stream_emits_routing_reason_header(client, db_rows):
+    """F1: the X-Routing-Reason header explains why a backend was chosen."""
+    r = await client.post("/v1/chat/completions", json={
+        "model": "mock-reasoner", "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert r.status_code == 200
+    reason = r.headers.get("X-Routing-Reason", "")
+    # With cache-affinity off (default), a tier-1 backend is picked first.
+    assert "tier-1" in reason, f"expected tier-1 in reason, got {reason!r}"
+    # X-Provider / X-Backend should also be present.
+    assert r.headers.get("X-Provider") == "mock1"
+    assert "/" in r.headers.get("X-Backend", "")
+
+
 async def test_non_stream_dual_emit_and_accounting(client, db_rows):
     r = await client.post("/v1/chat/completions", json={
         "model": "mock-reasoner", "messages": [{"role": "user", "content": "hi"}],

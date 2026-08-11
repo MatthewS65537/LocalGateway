@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Connections — LocalGateway{% endblock %}
+{% block content %}
+<div class="page" id="connections-page">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Connections</h1>
+      <p class="page-sub">Every backend across every model — sort, filter, and act on circuit state, snooze, and warmth.</p>
+    </div>
+    <div class="hstack">
+      <button class="secondary btn-sm" data-action="refreshConnections()">↻ Refresh</button>
+    </div>
+  </div>
+
+  <div class="filter-bar" style="margin-bottom:1rem;">
+    <button class="filter-btn on" data-cf="all">All <span class="cf-count" id="cf-all">0</span></button>
+    <button class="filter-btn" data-cf="available">Ready <span class="cf-count" id="cf-available">0</span></button>
+    <button class="filter-btn" data-cf="circuit">Failing <span class="cf-count" id="cf-circuit">0</span></button>
+    <button class="filter-btn" data-cf="snoozed">Paused <span class="cf-count" id="cf-snoozed">0</span></button>
+    <button class="filter-btn" data-cf="disabled">Off <span class="cf-count" id="cf-disabled">0</span></button>
+    <span style="flex:1"></span>
+    <button class="secondary btn-sm" data-action="bulkUnsnooze()">Unsnooze all</button>
+    <button class="secondary btn-sm" data-action="bulkResetCircuits()">Reset circuits</button>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table class="data-table" id="conn-table">
+        <thead><tr>
+          <th data-col="model" data-sort>Model</th>
+          <th data-col="backend" data-sort>Provider:Backend</th>
+          <th data-col="tier" data-sort>Tier</th>
+          <th data-col="state" data-sort>State</th>
+          <th data-col="inflight" data-sort>In-flight</th>
+          <th data-col="warm" data-sort>Warm</th>
+          <th data-col="latency" data-sort>Latency</th>
+          <th data-col="errors" data-sort>Errors</th>
+          <th>Actions</th>
+        </tr></thead>
+        <tbody id="conn-body">
+          <tr><td colspan="9"><div class="skeleton skeleton-block" style="min-height:120px"></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<button class="help-fab" data-action="showConnectionsHelp()" title="What do these mean?">?</button>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/connections.js"></script>
+{% endblock %}

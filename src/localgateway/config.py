@@ -6,15 +6,33 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class ApiKeyConfig(BaseModel):
+    """A client API key with optional quotas. ``id`` is a slug used for usage
+    attribution; ``key`` is the Bearer secret clients send."""
+    id: str
+    key: str
+    label: str = ""
+    enabled: bool = True
+    rpm: int | None = None                    # max requests/min; None = unlimited
+    daily_budget_usd: float | None = None     # hard stop at 402 when exceeded
+    monthly_budget_usd: float | None = None
+    model_allowlist: list[str] = Field(default_factory=list)  # empty = all models
 
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 3456
-    api_key: str | None = None
+    api_key: str | None = None  # legacy single key (full access); prefer api_keys
+    api_keys: list[ApiKeyConfig] = Field(default_factory=list)
     routing_mode: str = "explore"  # explore | failover
     routing_decay: float = 0.4
+    stats_routing_enabled: bool = True  # use measured TPS for sort/weights
+    circuit_breaker_enabled: bool = False
+    circuit_breaker_threshold: int = 3      # consecutive failures before trip
+    circuit_breaker_backoff_s: float = 60.0  # base backoff; doubles per trip (cap 30m)
     probe_enabled: bool = True
     probe_interval_s: float = 3600.0
     probe_max_tokens: int = 64
@@ -24,6 +42,11 @@ class ServerConfig(BaseModel):
     max_inflight_before_spill: int | None = None
     usage_retention_days: int = 30
     log_retention_lines: int = 10000
+    tokenizer: str = "auto"  # auto (tiktoken if installed) | heuristic
+    alert_webhook_url: str | None = None  # POST JSON alerts (circuit trips, budgets)
+    response_cache_enabled: bool = False  # global opt-in; per-model via ModelConfig.cache_responses
+    response_cache_ttl_sec: int = 3600
+    response_cache_max_entries: int = 1000
 
 
 class ProviderConfig(BaseModel):
@@ -38,6 +61,26 @@ class ProviderConfig(BaseModel):
     avatar: str = ""  # custom avatar text; empty = first letter of id
 
 
+def validated_api_key(provider: ProviderConfig) -> str:
+    """Return the provider's API key, raising ValueError with an actionable
+    message when it contains non-ASCII characters.
+
+    httpx/httpcore encodes request headers as ASCII, so a corrupted key (e.g.
+    the redacted-placeholder sentinel accidentally persisted by a config
+    round-trip) would otherwise surface as a cryptic UnicodeEncodeError.
+    """
+    key = provider.api_key or ""
+    try:
+        key.encode("ascii")
+    except UnicodeEncodeError:
+        raise ValueError(
+            f"Stored API key for provider '{provider.id}' is invalid (contains "
+            "non-ASCII characters — the redacted placeholder may have been saved "
+            "over it). Re-enter the key on the Providers page."
+        ) from None
+    return key
+
+
 class BackendConfig(BaseModel):
     provider: str
     model: str
@@ -46,6 +89,7 @@ class BackendConfig(BaseModel):
     context_length: int | None = None
     max_output_tokens: int | None = None
     cache_supported: bool | None = None
+    weight: float = 1.0  # within-tier load-balancing weight (1.0 = equal share). 0 = never first; higher = more traffic.
 
 
 class TimeSlot(BaseModel):
@@ -81,13 +125,27 @@ class ModelConfig(BaseModel):
     enabled: bool = True
     capabilities: dict[str, bool] = Field(default_factory=dict)
     modality: str = ""
+
+    @field_validator("modality", mode="before")
+    @classmethod
+    def _normalize_modality(cls, v):
+        # "text+vision" was the legacy label for non-text-only models; the UI now
+        # exposes a single "multimodal" bucket. Coerce on load so old configs /
+        # backups migrate automatically without a manual edit.
+        if v == "text+vision":
+            return "multimodal"
+        return v
+
     max_output_tokens: int | None = None
+    endpoint: str = "chat"  # chat | embeddings | responses — which upstream API this model serves
     tags: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     default_params: dict[str, Any] = Field(default_factory=dict)
     display_name: str = ""
     avatar: str = ""  # custom avatar text; empty = first letter of id/display_name
     time_routing: TimeRoutingConfig = Field(default_factory=TimeRoutingConfig)
+    probe_interval_s: float | None = None  # per-model override; None = server default
+    cache_responses: bool = False  # opt-in response caching (F5 stage 1: exact)
 
 
 class PricingEntry(BaseModel):
@@ -122,6 +180,109 @@ class GatewayConfig(BaseModel):
 
     def pricing_for(self, provider_id: str, model: str) -> PricingEntry:
         return self.pricing.get(f"{provider_id}:{model}", PricingEntry())
+
+    def api_key_by_id(self, key_id: str) -> ApiKeyConfig | None:
+        for k in self.server.api_keys:
+            if k.id == key_id:
+                return k
+        return None
+
+
+# ---------- N1: preflight validation ----------
+
+REDACTED_KEY = "\u2022\u2022\u2022\u2022\u2022\u2022"
+
+
+def validate_config(cfg: GatewayConfig) -> list[dict]:
+    """Dry-run lint of a candidate config. Returns a list of issues.
+
+    Each issue: {severity: "error"|"warning", code: str, path: str, message: str}.
+    Errors should block the save; warnings allow "Save anyway".
+    """
+    issues: list[dict] = []
+
+    # --- duplicate provider ids ---
+    seen_pids: set[str] = set()
+    for p in cfg.providers:
+        if p.id in seen_pids:
+            issues.append({"severity": "error", "code": "duplicate_provider_id",
+                           "path": f"providers[{p.id}]", "message": f"Duplicate provider id '{p.id}'"})
+        seen_pids.add(p.id)
+
+    # --- duplicate model ids + alias collisions ---
+    seen_mids: set[str] = set()
+    all_aliases: dict[str, str] = {}  # alias -> model_id
+    for m in cfg.models:
+        if m.id in seen_mids:
+            issues.append({"severity": "error", "code": "duplicate_model_id",
+                           "path": f"models[{m.id}]", "message": f"Duplicate model id '{m.id}'"})
+        seen_mids.add(m.id)
+        for alias in (m.aliases or []):
+            if alias in seen_mids or alias in all_aliases:
+                issues.append({"severity": "error", "code": "alias_collision",
+                               "path": f"models[{m.id}].aliases",
+                               "message": f"Alias '{alias}' collides with another model id or alias"})
+            all_aliases[alias] = m.id
+
+    # --- orphan backends (backend references missing provider) ---
+    for m in cfg.models:
+        for i, b in enumerate(m.backends):
+            if b.provider not in seen_pids:
+                issues.append({"severity": "error", "code": "orphan_backend",
+                               "path": f"models[{m.id}].backends[{i}]",
+                               "message": f"Backend references unknown provider '{b.provider}'"})
+
+    # --- placeholder / corrupted keys ---
+    for p in cfg.providers:
+        if p.api_key == REDACTED_KEY:
+            issues.append({"severity": "error", "code": "placeholder_key",
+                           "path": f"providers[{p.id}].api_key",
+                           "message": f"Provider '{p.id}' has the redacted placeholder key — re-enter the real key"})
+        elif p.api_key:
+            try:
+                p.api_key.encode("ascii")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                issues.append({"severity": "error", "code": "non_ascii_key",
+                               "path": f"providers[{p.id}].api_key",
+                               "message": f"Provider '{p.id}' key contains non-ASCII characters (likely corrupted)"})
+
+    # --- warnings ---
+
+    # model with no backends
+    for m in cfg.models:
+        if not m.backends:
+            issues.append({"severity": "warning", "code": "model_no_backends",
+                           "path": f"models[{m.id}]", "message": f"Model '{m.id}' has no backends"})
+
+    # disabled provider referenced by enabled backend
+    pid_enabled = {p.id: p.enabled for p in cfg.providers}
+    for m in cfg.models:
+        for i, b in enumerate(m.backends):
+            if b.enabled and b.provider in pid_enabled and not pid_enabled[b.provider]:
+                issues.append({"severity": "warning", "code": "disabled_provider_referenced",
+                               "path": f"models[{m.id}].backends[{i}]",
+                               "message": f"Backend references disabled provider '{b.provider}'"})
+
+    # pricing gaps
+    for m in cfg.models:
+        for i, b in enumerate(m.backends):
+            key = f"{b.provider}:{b.model}"
+            if key not in cfg.pricing:
+                issues.append({"severity": "warning", "code": "pricing_gap",
+                               "path": f"models[{m.id}].backends[{i}]",
+                               "message": f"No pricing for '{key}' — cost tracking will show $0"})
+
+    # max_output_tokens > context_length
+    for m in cfg.models:
+        mot = m.max_output_tokens
+        for i, b in enumerate(m.backends):
+            ctx = b.context_length or m.context_length
+            if mot and ctx and mot > ctx:
+                issues.append({"severity": "warning", "code": "mot_exceeds_context",
+                               "path": f"models[{m.id}].backends[{i}]",
+                               "message": f"max_output_tokens ({mot}) exceeds context_length ({ctx})"})
+
+    return issues
 
 
 _config_lock = threading.RLock()
@@ -203,6 +364,11 @@ def config_recovered_from() -> str | None:
     return _config_recovered
 
 
+def config_mtime() -> float:
+    """Mtime of the config file currently on disk (0 when missing)."""
+    return _file_mtime()
+
+
 def _parse(raw: dict) -> GatewayConfig:
     """Parse config with one-time field migrations for removed/renamed keys."""
     if isinstance(raw, dict):
@@ -275,6 +441,14 @@ def save_config(cfg: GatewayConfig) -> None:
         _config = cfg
         _config_recovered = None  # a clean save clears any recovery state
         _config_mtime = _file_mtime()
+    # A full-config PUT can rename model/provider IDs without going through
+    # /admin/rename, so drop the routing TPS cache (keyed by model_id). Lazy
+    # import avoids a config→usage circular dependency at load time.
+    try:
+        from . import usage as _usage
+        _usage.invalidate_tps_map()
+    except Exception:
+        pass
 
 
 def reload_config() -> GatewayConfig:

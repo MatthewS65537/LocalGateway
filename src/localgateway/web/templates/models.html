@@ -17,7 +17,7 @@
   <div class="modality-tabs" id="modality-tabs"></div>
 
   <div class="toolbar">
-    <input type="search" id="models-search" class="search-input" placeholder="Search models…" data-input="renderModelCatalog()">
+    <input type="search" id="models-search" class="search-input" placeholder="Search models…" data-input="debouncedRenderCatalog()">
     <select id="models-sort" data-change="renderModelCatalog()">
       <option value="tokens">Most used</option>
       <option value="name">Name</option>
@@ -42,8 +42,8 @@
       <option value="json_mode">JSON Mode</option>
       <option value="audio">Audio</option>
     </select>
-    <input type="number" id="filter-min-ctx" placeholder="Min context" data-input="renderModelCatalog()">
-    <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" data-input="renderModelCatalog()">
+    <input type="number" id="filter-min-ctx" placeholder="Min context" data-input="debouncedRenderCatalog()">
+    <input type="number" id="filter-max-price" placeholder="Max $/M input" step="0.01" data-input="debouncedRenderCatalog()">
     <span class="filter-hint">Tokens measured over the last 7 days</span>
   </div>
   <div id="models-loading" class="skeleton skeleton-block"></div>

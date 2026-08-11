@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from ..config import load_config
+from ..config import config_mtime, load_config
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ def _model_list_entry(m, config) -> dict:
             "input_modalities": [],
             "output_modalities": ["text"],
         }
-        if m.capabilities.get("vision") or "vision" in (m.modality or ""):
+        if m.capabilities.get("vision") or m.modality in ("text+vision", "multimodal"):
             architecture["input_modalities"].append("image")
         architecture["input_modalities"].insert(0, "text")
         if m.capabilities.get("audio"):
@@ -41,12 +41,13 @@ def _model_list_entry(m, config) -> dict:
     return {
         "id": m.id,
         "object": "model",
-        "created": 0,
+        "created": int(config_mtime()),
         "owned_by": "localgateway",
         "name": m.display_name or m.id,
         "description": m.description or None,
         "context_length": m.context_length,
         "max_output_tokens": m.max_output_tokens,
+        "endpoint": getattr(m, "endpoint", "chat"),
         "modality": m.modality or None,
         "architecture": architecture,
         "capabilities": m.capabilities or None,
@@ -67,3 +68,21 @@ async def list_models():
             continue
         models.append(_model_list_entry(m, config))
     return JSONResponse({"object": "list", "data": models})
+
+
+@router.get("/v1/models/{model_id}")
+@router.get("/api/v1/models/{model_id}")
+async def retrieve_model(model_id: str):
+    """OpenAI-style model retrieve. Resolves canonical IDs and aliases."""
+    config = load_config()
+    model = config.model_by_id(model_id)
+    if model is None or not model.enabled:
+        return JSONResponse(
+            {"error": {
+                "message": f"The model '{model_id}' does not exist",
+                "type": "invalid_request_error",
+                "code": "model_not_found",
+            }},
+            status_code=404,
+        )
+    return JSONResponse(_model_list_entry(model, config))

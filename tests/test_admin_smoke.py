@@ -32,7 +32,7 @@ def page_client(supervisor_app, monkeypatch):
         yield c
 
 
-PAGES = ["/", "/models", "/providers", "/usage", "/logs", "/settings", "/compare/foo,bar"]
+PAGES = ["/", "/models", "/providers", "/usage", "/logs", "/connections", "/settings", "/compare/foo,bar"]
 
 
 @pytest.mark.parametrize("path", PAGES)
@@ -68,6 +68,29 @@ def test_no_inline_event_handlers(page_client):
         assert 'oninput="' not in r.text, path
         # No inline <script> blocks either (theme init is an external file).
         assert "<script>" not in r.text.replace("</script>", ""), path
+
+
+def test_no_inline_handlers_in_js_sources():
+    """CSP safety (rendered HTML): JS-generated row/modal markup must not
+    embed inline event-handler attributes, which script-src 'self' blocks.
+    This closes the gap the page-level scan can't see (strings built in JS)."""
+    import pathlib
+    js_dir = pathlib.Path(__file__).resolve().parents[1] / "src" / "localgateway" / "web" / "js"
+    # Attribute form only: onX="..." (with an attribute value). Plain JS
+    # assignments like `el.onclick = fn` are CSP-safe and must not match.
+    inline_re = re.compile(
+        r"\bon(click|change|input|mousedown|mouseup|dragstart|dragover|dragenter|dragleave|drop|dragend|submit|keydown|keyup|keypress|focus|blur)\s*=\s*['\"]"
+    )
+    offenders = []
+    for path in sorted(js_dir.glob("*.js")):
+        src = path.read_text(encoding="utf-8")
+        # Ignore comments (they legitimately describe the migration).
+        src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+        src = re.sub(r"//[^\n]*", "", src)
+        for m in inline_re.finditer(src):
+            line_no = src.count("\n", 0, m.start()) + 1
+            offenders.append(f"{path.name}:{line_no}: {m.group(0).strip()}")
+    assert not offenders, "inline handlers found in JS-generated HTML:\n" + "\n".join(offenders)
 
 
 def test_csp_header_on_static_and_pages(page_client):

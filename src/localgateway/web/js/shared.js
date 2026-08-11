@@ -74,6 +74,7 @@ const _ACTION_TOKENS = {
   'this.dataset.provider': 'provider',
   'this.dataset.model': 'model',
   'this.dataset.slot': 'slot',
+  'this.dataset.key': 'key',
   'this.parentElement': 'parent',
 };
 
@@ -82,7 +83,7 @@ function _parseActionArg(raw, el, event) {
   if (raw === '') return { ok: false };
   const key = _ACTION_TOKENS[raw];
   if (key !== undefined) {
-    const ctx = { el, event, value: el.value, id: el.dataset.id, provider: el.dataset.provider, model: el.dataset.model, slot: el.dataset.slot, parent: el.parentElement };
+    const ctx = { el, event, value: el.value, id: el.dataset.id, provider: el.dataset.provider, model: el.dataset.model, slot: el.dataset.slot, key: el.dataset.key, parent: el.parentElement };
     return { ok: true, value: ctx[key] };
   }
   const q = raw[0];
@@ -129,6 +130,25 @@ document.addEventListener('click', (e) => {
   if (nav) { e.preventDefault(); location.href = nav; return; }
   if (el.hasAttribute('data-action')) {
     e.preventDefault();
+    _dispatchAction(el, e, el.dataset.action);
+  }
+});
+// C5: keyboard accessibility — row-cards, table rows, the server pill and
+// other click-only [data-nav]/[data-action] surfaces are now reachable by
+// Tab and activatable with Enter/Space (they already have tabindex/role in
+// their markup where needed).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target;
+  if (!(t instanceof Element)) return;
+  if (t.tagName === 'BUTTON' || t.tagName === 'A' || t.tagName === 'INPUT' ||
+      t.tagName === 'SELECT' || t.tagName === 'TEXTAREA') return;
+  const el = t.closest && t.closest('[data-nav], [data-action]');
+  if (!el) return;
+  e.preventDefault();
+  const nav = _navTarget(el);
+  if (nav) { location.href = nav; return; }
+  if (el.hasAttribute('data-action')) {
     _dispatchAction(el, e, el.dataset.action);
   }
 });
@@ -322,6 +342,40 @@ async function loadServerStatus() {
   } catch(_) { serverStatus = { running: false }; }
   updateServerUI();
 }
+function _renderAnomalyBanner(anomalies) {
+  if (!anomalies || anomalies.length === 0) {
+    const existing = document.getElementById('anomaly-banner');
+    if (existing) existing.remove();
+    return;
+  }
+  let banner = document.getElementById('anomaly-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'anomaly-banner';
+    banner.className = 'anomaly-banner';
+    const main = document.querySelector('.content');
+    if (main) main.insertBefore(banner, main.firstChild);
+    else document.body.insertBefore(banner, document.body.firstChild);
+  }
+  const items = anomalies.map(a =>
+    `<div class="anomaly-item">` +
+    `<span class="anomaly-scope">${esc(a.scope)}</span> ` +
+    `<code>${esc(a.scope_id)}</code> ` +
+    `spent <strong>$${a.actual.toFixed(4)}</strong> on ${esc(a.date)} ` +
+    `(expected $${a.expected.toFixed(4)}, z=${a.z_score}) ` +
+    `<button class="anomaly-dismiss" data-aid="${a.id}">Dismiss</button>` +
+    `</div>`
+  ).join('');
+  banner.innerHTML = `<div class="anomaly-header">Cost Anomaly Detected</div>${items}`;
+  banner.querySelectorAll('.anomaly-dismiss').forEach(btn => {
+    btn.onclick = async () => {
+      const aid = btn.dataset.aid;
+      await fetchJSON('/admin/anomalies/ack', { method: 'POST', body: JSON.stringify({ id: parseInt(aid) }) });
+      loadServerStatus();
+    };
+  });
+}
+
 function updateServerUI() {
   const running = serverStatus.running;
   const dot = document.getElementById('pill-dot');
@@ -341,7 +395,9 @@ function updateServerUI() {
     if (up) up.textContent = fmtUptime(serverStatus.uptime);
   }
   const dp = document.getElementById('dash-port-input');
-  if (dp && serverStatus.port != null) dp.value = serverStatus.port;
+  // U4: don't clobber a port the user is actively typing — the 5s status poll
+  // used to revert their in-progress edit.
+  if (dp && serverStatus.port != null && document.activeElement !== dp) dp.value = serverStatus.port;
 
   // Config-recovery warning: a corrupt config.json was replaced by a backup.
   const recBadge = document.getElementById('config-recovered-badge');
@@ -354,6 +410,9 @@ function updateServerUI() {
     }
   }
 
+  // N2: cost anomaly banner
+  _renderAnomalyBanner(serverStatus.anomalies || []);
+
   for (const prefix of ['dash', 'log']) {
     const start = document.getElementById(prefix + '-start');
     const stop = document.getElementById(prefix + '-stop');
@@ -361,21 +420,47 @@ function updateServerUI() {
     if (stop) stop.disabled = !running;
   }
 }
+async function _waitForRunning(expected, timeoutMs) {
+  // U5: poll /admin/server/status until the running flag matches `expected`
+  // (or timeout) — the old code toasted success unconditionally on a fixed
+  // timer even when start/restart failed (port in use, bad config).
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await loadServerStatus();
+    if (serverStatus.running === expected) return true;
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return serverStatus.running === expected;
+}
 async function startServer() {
   toast('Starting gateway…', 'info', 2000);
-  await fetch('/admin/server/start', { method: 'POST' });
-  setTimeout(async () => { await loadServerStatus(); toast('Gateway started', 'success'); }, 800);
+  const r = await fetch('/admin/server/start', { method: 'POST' });
+  if (!r.ok) {
+    let msg = 'Failed to start gateway';
+    try { const d = await r.json(); if (d && d.detail) msg = 'Failed to start: ' + d.detail; } catch(_) {}
+    toast(msg, 'error');
+    return;
+  }
+  const ok = await _waitForRunning(true, 8000);
+  toast(ok ? 'Gateway started' : 'Gateway did not come up — check the server log', ok ? 'success' : 'error');
 }
 async function stopServer() {
   if (!await confirm2('Stop the gateway? The dashboard stays up, but model requests will fail until you start it again.')) return;
-  await fetch('/admin/server/stop', { method: 'POST' });
+  const r = await fetch('/admin/server/stop', { method: 'POST' });
   await loadServerStatus();
-  toast('Gateway stopped', 'info');
+  toast(r.ok ? 'Gateway stopped' : 'Failed to stop gateway', r.ok ? 'info' : 'error');
 }
 async function restartServer() {
   toast('Restarting gateway…', 'info', 2000);
-  await fetch('/admin/server/restart', { method: 'POST' });
-  setTimeout(async () => { await loadServerStatus(); toast('Gateway restarted', 'success'); }, 1000);
+  const r = await fetch('/admin/server/restart', { method: 'POST' });
+  if (!r.ok) {
+    let msg = 'Failed to restart gateway';
+    try { const d = await r.json(); if (d && d.detail) msg = 'Failed to restart: ' + d.detail; } catch(_) {}
+    toast(msg, 'error');
+    return;
+  }
+  const ok = await _waitForRunning(true, 10000);
+  toast(ok ? 'Gateway restarted' : 'Gateway did not come up — check the server log', ok ? 'success' : 'error');
 }
 
 async function shutdownGateway() {
@@ -415,6 +500,7 @@ const COMMANDS = [
   { label: 'Providers', hint: 'Navigate to providers', action: () => location.href = '/providers' },
   { label: 'Usage', hint: 'View usage analytics', action: () => location.href = '/usage' },
   { label: 'Logs', hint: 'View system logs', action: () => location.href = '/logs' },
+  { label: 'Connections', hint: 'View backend health & circuits', action: () => location.href = '/connections' },
   { label: 'Settings', hint: 'View settings', action: () => location.href = '/settings' },
   { label: 'Toggle Theme', hint: 'Switch dark/light mode', action: () => toggleTheme() },
   { label: 'Reload Config', hint: 'Reload gateway configuration', action: () => fetch('/admin/config/reload', { method: 'POST' }).then(() => toast('Config reloaded', 'success')) },
@@ -457,6 +543,10 @@ function openCommandPalette() {
 function closeCommandPalette() {
   document.getElementById('command-palette').classList.add('hidden');
 }
+// C5: the palette backdrop had no click-to-dismiss (Esc/⌘K only).
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'command-palette') closeCommandPalette();
+});
 
 // Subsequence fuzzy scorer: returns a score >= 0 if every char of `q` appears
 // in `text` in order, else -1. Lower score = better match; contiguous runs
@@ -484,6 +574,74 @@ function invalidatePalette() { paletteIndex = null; }
 
 // Save a scoped change to config with optimistic-concurrency handling.
 // mutate(data) applies the edit to a fresh GET copy; on a 409 (config changed
+// N1: structural JSON diff for the preflight review modal.
+function _configDiff(before, after, prefix, depth) {
+  prefix = prefix || '';
+  depth = depth || 0;
+  if (depth > 4) return [];
+  if (prefix === 'version') return [];
+  const changes = [];
+  if (Array.isArray(after)) {
+    if (!Array.isArray(before)) return [{ path: prefix, action: 'changed', from: before, to: after }];
+    const max = Math.max(before.length, after.length);
+    for (let i = 0; i < max; i++) {
+      if (i >= before.length) changes.push({ path: `${prefix}[${i}]`, action: 'added', to: after[i] });
+      else if (i >= after.length) changes.push({ path: `${prefix}[${i}]`, action: 'removed', from: before[i] });
+      else changes.push(..._configDiff(before[i], after[i], `${prefix}[${i}]`, depth + 1));
+    }
+    return changes;
+  }
+  if (typeof after === 'object' && after !== null) {
+    const b = before || {};
+    const keys = new Set([...Object.keys(b), ...Object.keys(after)]);
+    for (const k of keys) {
+      if (k === 'version') continue;
+      const p = prefix ? `${prefix}.${k}` : k;
+      if (!(k in b)) changes.push({ path: p, action: 'added', to: after[k] });
+      else if (!(k in after)) changes.push({ path: p, action: 'removed', from: b[k] });
+      else changes.push(..._configDiff(b[k], after[k], p, depth + 1));
+    }
+    return changes;
+  }
+  if (before !== after) return [{ path: prefix, action: 'changed', from: before, to: after }];
+  return [];
+}
+
+function _showPreflightModal(issues, before, after) {
+  return new Promise(resolve => {
+    const errors = issues.filter(i => i.severity === 'error');
+    const warnings = issues.filter(i => i.severity === 'warning');
+    const diff = _configDiff(before, after);
+    const issueHtml = issues.map(i =>
+      `<div class="preflight-issue ${i.severity}">` +
+      `<span class="sev ${i.severity}">${i.severity}</span> ` +
+      `<code>${esc(i.path)}</code> ${esc(i.message)}</div>`
+    ).join('');
+    const diffHtml = diff.length > 0
+      ? diff.slice(0, 20).map(d => {
+          const v = d.action === 'added' ? `<span class="diff-add">+ new</span>`
+            : d.action === 'removed' ? `<span class="diff-del">- removed</span>`
+            : `<span class="diff-chg">${esc(String(d.from).slice(0, 40))} → ${esc(String(d.to).slice(0, 40))}</span>`;
+          return `<div class="preflight-diff"><code>${esc(d.path)}</code> ${v}</div>`;
+        }).join('') + (diff.length > 20 ? `<div class="preflight-more">… and ${diff.length - 20} more</div>` : '')
+      : '<p class="modal-sub">No structural changes detected.</p>';
+    const overlay = openModal({
+      title: errors.length > 0 ? 'Validation Errors — Save Blocked' : 'Review Changes',
+      bodyHtml:
+        (issueHtml ? `<div class="preflight-issues">${issueHtml}</div>` : '') +
+        `<div class="preflight-diffs"><h4>Changes</h4>${diffHtml}</div>` +
+        `<div class="modal-actions">` +
+        `<button class="secondary" data-act="no">Cancel</button>` +
+        (errors.length === 0 ? `<button data-act="yes">Save anyway</button>` : '') +
+        `</div>`,
+      widthClass: 'modal-lg',
+    });
+    const yesBtn = overlay.querySelector('[data-act="yes"]');
+    if (yesBtn) yesBtn.onclick = () => { closeModal(overlay); resolve(true); };
+    overlay.querySelector('[data-act="no"]').onclick = () => { closeModal(overlay); resolve(false); };
+  });
+}
+
 // since load) we re-GET and retry up to `maxRetries` times. On success we
 // invalidate the palette so the fuzzy command index stays fresh. Returns the
 // {ok, status} of the final attempt.
@@ -495,13 +653,37 @@ async function saveConfigSection(mutate, { maxRetries = 2, onConflict = null } =
       if (!res.ok) { toast('Failed to load config', 'error'); return { ok: false, status: res.status }; }
       data = res.data;
     } catch (e) { toast('Error: ' + e.message, 'error'); return { ok: false, status: 0 }; }
-    mutate(data);
+    const _before = JSON.parse(JSON.stringify(data));
+    try {
+      mutate(data);
+    } catch (e) {
+      // U6: a throwing mutate (e.g. "Key ID already exists") was an unhandled
+      // rejection with no visible feedback — surface the message.
+      toast(e && e.message ? e.message : 'Failed to prepare changes', 'error');
+      return { ok: false, status: 0 };
+    }
+    // N1: preflight validation — dry-run before writing. Modal only appears
+    // when issues are found; clean saves proceed silently.
+    try {
+      const vres = await fetchJSON('/admin/config/validate', { method: 'POST', body: JSON.stringify(data) });
+      if (vres.ok && vres.data && vres.data.issues && vres.data.issues.length > 0) {
+        const proceed = await _showPreflightModal(vres.data.issues, _before, data);
+        if (!proceed) return { ok: false, status: 0 };
+      }
+    } catch (e) {
+      // Validation endpoint unreachable — fail-open (proceed with save)
+    }
     const put = await fetchJSON('/admin/config', { method: 'PUT', body: JSON.stringify(data) });
     if (put.status === 409) {
       if (onConflict) onConflict();
       continue; // re-GET on next iteration and retry
     }
-    if (put.ok) invalidatePalette();
+    if (put.ok) {
+      invalidatePalette();
+      // P10: the settings page memoizes one config fetch per page load;
+      // a successful PUT means the memo is stale.
+      if (window.__onConfigSaved) window.__onConfigSaved();
+    }
     else if (put.status === 422) {
       const msg = validationError(put.data);
       toast(msg ? 'Validation failed: ' + msg : 'Failed to save changes', 'error');
@@ -594,7 +776,58 @@ document.addEventListener('keydown', (e) => {
     const palette = document.getElementById('command-palette');
     if (!palette.classList.contains('hidden')) closeCommandPalette();
   }
+  // L2: vim-style `g` then a page key — navigate without touching the mouse.
+  // Ignored while typing in inputs/textarea (including the palette).
+  if (e.key === 'g' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    const t = e.target;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    if (!typing) _pendingG = true;
+    return;
+  }
+  if (_pendingG) {
+    _pendingG = false;
+    const t = e.target;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    if (typing) return;
+    const map = {
+      d: '/', m: '/models', p: '/providers', u: '/usage',
+      l: '/logs', c: '/connections', s: '/settings',
+    };
+    const href = map[e.key];
+    if (href) { e.preventDefault(); location.href = href; }
+    return;
+  }
+  // `?` shows the shortcut cheat-sheet (fires with shift on US layouts).
+  if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    const t = e.target;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    if (!typing) { e.preventDefault(); showShortcutsHelp(); }
+  }
 });
+let _pendingG = false;
+
+function showShortcutsHelp() {
+  const rows = [
+    ['g then d', 'Dashboard'],
+    ['g then m', 'Models'],
+    ['g then p', 'Providers'],
+    ['g then u', 'Usage'],
+    ['g then l', 'Logs'],
+    ['g then c', 'Connections'],
+    ['g then s', 'Settings'],
+    ['⌘K', 'Command palette'],
+    ['/', 'Search (models page)'],
+    ['?', 'This cheat-sheet'],
+  ];
+  openModal({
+    title: 'Keyboard shortcuts',
+    bodyHtml: '<div class="stack">' + rows.map(([k, d]) =>
+      '<div class="hstack" style="justify-content:space-between"><code>' + esc(k) + '</code><span class="filter-hint">' + esc(d) + '</span></div>'
+    ).join('') + '</div>' +
+      '<div class="modal-actions"><button class="secondary" data-cancel>Close</button></div>',
+    onMount: (ov) => { ov.querySelector('[data-cancel]').onclick = () => closeModal(ov); },
+  });
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   const paletteInput = document.getElementById('palette-search');
@@ -660,9 +893,11 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- shared init ----------
 let _statusTimer = null;
-function startStatusPolling() {
-  if (_statusTimer) return;
-  _statusTimer = setInterval(loadServerStatus, 5000);
+const _STATUS_FAST = 5000;
+const _STATUS_SLOW = 30000;
+function startStatusPolling(ms) {
+  if (_statusTimer) clearInterval(_statusTimer);
+  _statusTimer = setInterval(loadServerStatus, ms || _STATUS_FAST);
 }
 function stopStatusPolling() {
   if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
@@ -670,7 +905,73 @@ function stopStatusPolling() {
 // Pause background polling when the tab is hidden to avoid wasteful requests.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopStatusPolling();
-  else { loadServerStatus(); startStatusPolling(); }
+  else { loadServerStatus(); startStatusPolling(LGEvents.isLive() ? _STATUS_SLOW : _STATUS_FAST); }
 });
 loadServerStatus();
-startStatusPolling();
+startStatusPolling(_STATUS_FAST);
+
+// ---------- L1: SSE event bus ----------
+const LGEvents = (() => {
+  const _tickHandlers = [];
+  const _circuitHandlers = [];
+  const _pollers = [];
+  let _live = false;
+  let _es = null;
+
+  function _onConnect() {
+    if (_live) return;
+    _live = true;
+    _pollers.forEach(p => p.slow());
+  }
+  function _onDisconnect() {
+    if (!_live) return;
+    _live = false;
+    _pollers.forEach(p => p.fast());
+  }
+  function _dispatch(list, data) {
+    for (const fn of list) { try { fn(data); } catch (e) {} }
+  }
+
+  function init() {
+    try {
+      _es = new EventSource('/admin/events');
+      _es.addEventListener('hello', () => _onConnect());
+      _es.addEventListener('open', () => _onConnect());
+      _es.addEventListener('tick', e => {
+        _onConnect();
+        try { _dispatch(_tickHandlers, JSON.parse(e.data)); } catch (err) {}
+      });
+      _es.addEventListener('circuit', e => {
+        try { _dispatch(_circuitHandlers, JSON.parse(e.data)); } catch (err) {}
+      });
+      _es.onerror = () => _onDisconnect();
+    } catch (e) {
+      // EventSource unsupported — pollers stay fast
+    }
+  }
+
+  return {
+    onTick(fn) { _tickHandlers.push(fn); },
+    onCircuit(fn) { _circuitHandlers.push(fn); },
+    registerPoller(fn, fastMs, slowMs) {
+      let timer = setInterval(fn, fastMs);
+      const p = {
+        slow() { clearInterval(timer); timer = setInterval(fn, slowMs); },
+        fast() { clearInterval(timer); timer = setInterval(fn, fastMs); },
+        stop() { clearInterval(timer); },
+      };
+      _pollers.push(p);
+      return p;
+    },
+    isLive() { return _live; },
+    init,
+  };
+})();
+window.LGEvents = LGEvents;
+
+// When SSE delivers a tick, refresh the status pill instantly.
+LGEvents.onTick(() => { if (!document.hidden) loadServerStatus(); });
+// Start the event bus and replace the status poller with an adaptive one.
+stopStatusPolling();
+LGEvents.registerPoller(loadServerStatus, _STATUS_FAST, _STATUS_SLOW);
+LGEvents.init();

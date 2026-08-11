@@ -25,6 +25,27 @@
   </div>
 
   <div id="usage-loading" class="skeleton skeleton-block"></div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Over Time</h2>
+      <div class="hstack">
+        <div class="seg">
+          <button class="usage-metric-btn active" data-action="setUsageMetric('cost', this)">Cost</button>
+          <button class="usage-metric-btn" data-action="setUsageMetric('tokens', this)">Tokens</button>
+        </div>
+        <label class="field-label" style="font-size:0.74rem;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" id="usage-export-probes"> Include probes
+        </label>
+        <button class="secondary" data-action="exportUsage('csv')">⬇ CSV</button>
+        <button class="secondary" data-action="exportUsage('json')">⬇ JSON</button>
+      </div>
+    </div>
+    <div id="usage-chart">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
   <div class="grid grid-2">
     <div class="card">
       <div class="card-head"><h2>By Provider</h2></div>
@@ -41,6 +62,27 @@
         <table>
           <thead><tr><th>Model</th><th>Reqs</th><th>Tokens</th><th>Cached</th><th>Cost</th></tr></thead>
           <tbody id="usage-model"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-head"><h2>By API Key</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>Reqs</th><th>Tokens</th><th>Cost</th></tr></thead>
+          <tbody id="usage-keys"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>By User (OpenAI <code>user</code> field)</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>User</th><th>Reqs</th><th>Tokens</th><th>Cost</th></tr></thead>
+          <tbody id="usage-users"></tbody>
         </table>
       </div>
     </div>

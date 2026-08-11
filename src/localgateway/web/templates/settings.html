@@ -19,17 +19,33 @@
         <div class="field-hint">Restart required after changing port.</div>
       </div>
       <div class="settings-field">
-        <label class="field-label" for="settings-api-key">Gateway API Key</label>
+        <label class="field-label" for="settings-api-key">Legacy Gateway API Key</label>
         <div class="hstack">
           <input type="password" id="settings-api-key" class="api-key-input" placeholder="(none — open access)">
           <button type="button" class="secondary" data-action="toggleApiKeyVisibility()">Show</button>
           <button type="button" class="secondary" data-action="copyApiKey()">Copy</button>
+          <button type="button" class="secondary" data-action="clearLegacyKey()">Clear</button>
         </div>
-        <div class="field-hint">Required as Bearer token for /v1 and /api/v1. Leave blank for no auth. The admin UI is always open to local (loopback) connections; remote clients need the key.</div>
+        <div class="field-hint">Legacy full-access key (required as Bearer token when set). Prefer <em>Access Keys</em> below for per-key quotas. The admin UI is always open to loopback connections.</div>
       </div>
       <div class="hstack">
         <button class="primary" data-action="saveServerSettings()">Save</button>
         <button class="secondary" data-action="loadServerSettings()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Access Keys</h2>
+      <div class="field-hint">Per-key quotas, budgets, and model allowlists. The legacy gateway key behaves as a full-access key.</div>
+    </div>
+    <div class="stack">
+      <div id="keys-list-wrap">
+        <p class="field-hint">Loading…</p>
+      </div>
+      <div class="hstack">
+        <button class="primary" data-action="showAddKeyModal()">+ Add Key</button>
+        <button class="secondary" data-action="loadAccessKeys()">Refresh spend</button>
       </div>
     </div>
   </div>
@@ -55,11 +71,69 @@
           <div id="decay-viz" class="decay-viz"></div>
         </div>
       </div>
+      <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
+        <input type="checkbox" id="settings-stats-routing" data-change="toggleStatsRouting()">
+        Route by measured performance (TPS p50 from usage + probes)
+      </label>
+      <div class="field-hint" style="margin:0 0 4px">When on, throughput/value sorts and explore-mode weights use real measured TPS instead of static proxies.</div>
       <div class="hstack">
         <button class="primary" data-action="saveRoutingSettings()">Save</button>
         <button class="secondary" data-action="loadRoutingSettings()">Reset</button>
       </div>
     </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Circuit Breaker</h2>
+      <div class="field-hint">Cut flaky backends out of rotation before they burn every request.</div>
+    </div>
+    <div class="stack">
+      <label class="field-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
+        <input type="checkbox" id="settings-circuit-enabled" data-change="toggleCircuitSettings()">
+        Enable automatic circuit breaking on repeated backend failures
+      </label>
+      <div id="circuit-options" class="stack">
+        <div class="settings-field">
+          <label class="field-label" for="settings-circuit-threshold">Failures before trip</label>
+          <input type="number" id="settings-circuit-threshold" class="input-narrow" min="1" max="20" value="3">
+          <div class="field-hint">Consecutive 5xx / timeouts / connection errors (429s don't count — they use the cooldown path).</div>
+        </div>
+        <div class="settings-field">
+          <label class="field-label" for="settings-circuit-backoff">Base backoff</label>
+          <select id="settings-circuit-backoff" class="input-narrow">
+            <option value="30">30 seconds</option>
+            <option value="60" selected>1 minute</option>
+            <option value="300">5 minutes</option>
+            <option value="900">15 minutes</option>
+          </select>
+          <div class="field-hint">Doubles per consecutive trip, capped at 30 minutes. The first request after the backoff is a trial.</div>
+        </div>
+        <div id="circuit-status" class="filter-hint">No circuits open.</div>
+      </div>
+      <div class="hstack">
+        <button class="primary" data-action="saveCircuitSettings()">Save</button>
+        <button class="secondary" data-action="loadCircuitSettings()">Reset</button>
+        <button class="secondary" data-action="resetAllCircuits()">Close All Circuits</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="response-cache-card">
+    <div class="card-head"><h2>Response Cache</h2>
+      <div class="hstack">
+        <button class="secondary btn-sm" data-action="loadCacheAdmin()">Refresh</button>
+        <button class="danger btn-sm" data-action="clearResponseCache()">Clear cache</button>
+      </div>
+    </div>
+    <div class="settings-field" style="margin-bottom:8px">
+      <label class="field-label" for="settings-resp-cache-enabled">Server-wide exact-match response cache</label>
+      <select id="settings-resp-cache-enabled" class="input-narrow" data-change="saveCacheEnabledFlag()">
+        <option value="false">Off</option>
+        <option value="true">On</option>
+      </select>
+      <div class="field-hint">Replays identical requests (same prompt, temp &le; 0.1, no tools) from SQLite with X-Cache-Hit and cost 0. Models opt in per-model via the Metadata editor.</div>
+    </div>
+    <div id="cache-admin-status" class="filter-hint">—</div>
   </div>
 
   <div class="card">
@@ -130,6 +204,42 @@
         <button class="primary" data-action="saveCacheAffinitySettings()">Save</button>
         <button class="secondary" data-action="loadCacheAffinitySettings()">Reset</button>
         <button class="secondary" data-action="clearWarmth()">Clear Warmth Data</button>
+      </div>
+      <div id="warmth-view" style="margin-top:8px">
+        <div class="field-hint" style="margin-bottom:8px">Live warmth registry — request fingerprints × backends (green = warm). Hover a cell for hit rate.</div>
+        <div id="warmth-heatmap" class="warmth-heatmap"></div>
+        <div id="warmth-summary" class="filter-hint" style="margin-top:6px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Alerts</h2>
+      <div class="field-hint">POST JSON notifications (circuit trips, budget exhaustion) to a webhook — ntfy.sh, Slack/Discord relays, or any endpoint.</div>
+    </div>
+    <div class="stack">
+      <div class="settings-field">
+        <label class="field-label" for="settings-alert-url">Webhook URL</label>
+        <input type="text" id="settings-alert-url" class="api-key-input" placeholder="https://ntfy.sh/mytopic (blank = disabled)">
+      </div>
+      <div class="hstack">
+        <button class="primary" data-action="saveAlertSettings()">Save</button>
+        <button class="secondary" data-action="loadAlertSettings()">Reset</button>
+        <button class="secondary" data-action="sendTestAlert()">Send test alert</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Config Backups</h2>
+      <div class="field-hint">Five rotating generations are kept before every save; restore any of them here.</div>
+    </div>
+    <div class="stack">
+      <div id="backups-list" class="stack">
+        <p class="field-hint">Loading…</p>
+      </div>
+      <div class="hstack">
+        <button class="secondary" data-action="loadBackups()">Refresh</button>
       </div>
     </div>
   </div>

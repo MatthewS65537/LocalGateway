@@ -30,12 +30,60 @@ def test_multiline_data_joined():
     assert events[0].data == "line1\nline2"
 
 
+def test_data_strips_exactly_one_leading_space():
+    """B2 regression: SSE spec (HTML5 §9.2.4) strips ONE leading U+0020 after
+    the colon. The old lstrip(" ") stripped all leading spaces, corrupting
+    payloads that legitimately begin with a space."""
+    p = SSEParser()
+    # Two spaces after "data:" — one is the field separator, the second is
+    # part of the value and must be preserved.
+    events = p.feed(b'data:  {"k":" v"}\n\n')
+    assert events[0].data == ' {"k":" v"}', repr(events[0].data)
+    # Single space is stripped.
+    events = p.feed(b'data: {"a":1}\n\n')
+    assert events[0].data == '{"a":1}'
+    # No space stays no space.
+    events = p.feed(b'data:{"a":1}\n\n')
+    assert events[0].data == '{"a":1}'
+
+
+def test_crlf_split_across_chunk_boundary():
+    """CRLF normalisation must not falsely join events when the '\r' lands at
+    the end of one chunk and the '\n' at the start of the next."""
+    p = SSEParser()
+    events = p.feed(b'data: {"a":1}\r') + p.feed(b'\n\r\ndata: [DONE]\r\n\r\n')
+    assert len(events) == 2
+    assert events[0].data == '{"a":1}'
+    assert events[1].done
+
+
 def test_flush_trailing_bytes():
     p = SSEParser()
     assert p.feed(b'data: {"a":1}') == []
     ev = p.flush()
     assert ev is not None and ev.data == '{"a":1}'
     assert p.flush() is None
+
+
+def test_flush_captures_raw():
+    """P7: flush() now captures raw so tail events are byte-faithful
+    (previously they were re-serialized, losing original formatting)."""
+    p = SSEParser()
+    p.feed(b'data: {"x": 1}\n')  # no trailing blank line → stays in buffer
+    ev = p.flush()
+    assert ev is not None
+    assert ev.raw is not None
+    assert render_event(ev) == b'data: {"x": 1}\n\n'
+
+
+def test_flush_raw_preserves_multiline_data():
+    """P7: flushed events with multi-line data preserve original bytes."""
+    p = SSEParser()
+    p.feed(b'data: line1\ndata: line2\n')
+    ev = p.flush()
+    assert ev is not None
+    assert ev.raw is not None
+    assert render_event(ev) == b'data: line1\ndata: line2\n\n'
 
 
 def test_render_roundtrip():

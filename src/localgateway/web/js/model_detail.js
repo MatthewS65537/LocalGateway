@@ -81,15 +81,35 @@ function loadModelDetailPage(id) {
   modelDetailState.id = decodeURIComponent(id);
   reloadModelDetail();
   startInflightPolling();
-  document.getElementById('detail-rows').onclick = function(ev) {
+  const rowsEl = document.getElementById('detail-rows');
+  rowsEl.onclick = function(ev) {
     const dot = ev.target.closest('.routing-dot');
-    if (!dot) return;
-    if (dot.classList.contains('snoozed')) {
-      showUnsnoozeConfirm(dot.dataset.provider, dot.dataset.model);
-    } else {
-      showSnoozeModal(dot.dataset.provider, dot.dataset.model);
+    if (dot) {
+      if (dot.classList.contains('snoozed')) {
+        showUnsnoozeConfirm(dot.dataset.provider, dot.dataset.model);
+      } else {
+        showSnoozeModal(dot.dataset.provider, dot.dataset.model);
+      }
     }
   };
+  // Delegated drag-to-retier (CSP: inline ondrag* handlers on JS-generated
+  // rows are blocked by script-src 'self'; delegate instead).
+  rowsEl.addEventListener('dragstart', function(ev) {
+    const tr = ev.target.closest('tr[data-tier-row]');
+    if (tr) detailRowDragStart(ev, tr);
+  });
+  rowsEl.addEventListener('dragover', function(ev) {
+    const tr = ev.target.closest('tr[data-tier-row]');
+    if (tr) detailRowDragOver(ev, tr);
+  });
+  rowsEl.addEventListener('drop', function(ev) {
+    const tr = ev.target.closest('tr[data-tier-row]');
+    if (tr) detailRowDrop(ev, tr);
+  });
+  rowsEl.addEventListener('dragend', function(ev) {
+    const tr = ev.target.closest('tr[data-tier-row]');
+    if (tr) detailRowDragEnd(ev, tr);
+  });
   initSubnavScrollSpy();
 }
 
@@ -127,11 +147,13 @@ function initSubnavScrollSpy() {
 let _inflightTimer = null;
 function startInflightPolling() {
   stopInflightPolling();
-  _inflightTimer = setInterval(pollInflight, 2000);
+  // L1: SSE tick triggers instant inflight refresh; poller backs off to 30s.
+  LGEvents.onTick(pollInflight);
+  _inflightTimer = LGEvents.registerPoller(pollInflight, 2000, 30000);
   pollInflight();
 }
 function stopInflightPolling() {
-  if (_inflightTimer) { clearInterval(_inflightTimer); _inflightTimer = null; }
+  if (_inflightTimer) { if (_inflightTimer.stop) _inflightTimer.stop(); else clearInterval(_inflightTimer); _inflightTimer = null; }
 }
 async function pollInflight() {
   if (!modelDetailState.id || document.hidden) return;
@@ -359,7 +381,7 @@ async function reloadModelDetail() {
     const spendStr = totals.cost != null ? '$' + totals.cost.toFixed(4) : '—';
     renderDetailStatStrip(cfgModel, priceStr, ctxStr, bestP50, uptimeStr, tokensStr, spendStr);
   } catch(e) {
-    document.getElementById('detail-rows').innerHTML = '<tr><td colspan="14" class="empty">Gateway is stopped — start it to see live stats.</td></tr>';
+    document.getElementById('detail-rows').innerHTML = '<tr><td colspan="15" class="empty">Gateway is stopped — start it to see live stats.</td></tr>';
     document.getElementById('detail-chart').innerHTML = '<div class="empty">No data.</div>';
     renderDetailStatStrip(cfgModel, '—', '—', '—', '—', '—', '—');
   }
@@ -442,11 +464,28 @@ function editModelMetadata() {
         '<select id="edit-modality">' +
           '<option value=""' + (!cfgModel.modality ? ' selected' : '') + '>None</option>' +
           '<option value="text"' + (cfgModel.modality === 'text' ? ' selected' : '') + '>Text</option>' +
-          '<option value="text+vision"' + (cfgModel.modality === 'text+vision' ? ' selected' : '') + '>Text + Vision</option>' +
           '<option value="multimodal"' + (cfgModel.modality === 'multimodal' ? ' selected' : '') + '>Multimodal</option>' +
         '</select></div>' +
       '<div class="field"><label class="field-label" for="edit-max-output">Max Output Tokens</label>' +
         '<input type="number" id="edit-max-output" value="' + (cfgModel.max_output_tokens || '') + '"></div>' +
+      '<div class="field"><label class="field-label" for="edit-probe-interval">Probe Interval (seconds)</label>' +
+        '<input type="number" id="edit-probe-interval" value="' + (cfgModel.probe_interval_s != null ? cfgModel.probe_interval_s : '') + '" placeholder="blank = server default">' +
+        '<div class="field-hint">How often to probe this model\'s backends for fresh TPS data. Leave blank to use the server default. Use a shorter interval for cheap/fast models and a longer one for expensive models to control spend.</div></div>' +
+      '<div class="hstack">' +
+        '<div class="field" style="flex:1"><label class="field-label" for="edit-cache-resp">Response Cache</label>' +
+          '<select id="edit-cache-resp">' +
+            '<option value="false"' + (cfgModel.cache_responses !== true ? ' selected' : '') + '>Off</option>' +
+            '<option value="true"' + (cfgModel.cache_responses === true ? ' selected' : '') + '>On (exact-match)</option>' +
+          '</select>' +
+          '<div class="field-hint">Replays identical requests from cache (cost 0, requires server response_cache_enabled).</div></div>' +
+        '<div class="field" style="flex:1"><label class="field-label" for="edit-endpoint">API Endpoint</label>' +
+          '<select id="edit-endpoint">' +
+            '<option value="chat"' + (!cfgModel.endpoint || cfgModel.endpoint === 'chat' ? ' selected' : '') + '>chat/completions</option>' +
+            '<option value="responses"' + (cfgModel.endpoint === 'responses' ? ' selected' : '') + '>Responses API</option>' +
+            '<option value="embeddings"' + (cfgModel.endpoint === 'embeddings' ? ' selected' : '') + '>embeddings</option>' +
+          '</select>' +
+          '<div class="field-hint">Which upstream API surface this logical model speaks.</div></div>' +
+      '</div>' +
       '<div class="field"><label class="field-label" for="edit-tags">Tags (comma-separated)</label>' +
         '<input type="text" id="edit-tags" value="' + esc((cfgModel.tags || []).join(',')) + '" placeholder="fast,cheap,smart"></div>' +
       '<div class="field"><label class="field-label" for="edit-aliases">Aliases (comma-separated)</label>' +
@@ -512,6 +551,7 @@ async function saveModelMetadata(overlay) {
   }
 
   const maxOutput = document.getElementById('edit-max-output').value;
+  const probeInterval = document.getElementById('edit-probe-interval').value;
   const newSlug = document.getElementById('edit-slug').value.trim();
 
   const body = {
@@ -519,6 +559,9 @@ async function saveModelMetadata(overlay) {
     description: document.getElementById('edit-description').value,
     modality: document.getElementById('edit-modality').value,
     max_output_tokens: maxOutput ? parseInt(maxOutput) : null,
+    probe_interval_s: probeInterval ? parseFloat(probeInterval) : null,
+    cache_responses: document.getElementById('edit-cache-resp').value === 'true',
+    endpoint: document.getElementById('edit-endpoint').value,
     tags,
     aliases,
     default_params,
@@ -541,12 +584,14 @@ async function saveModelMetadata(overlay) {
         return;
       }
       targetId = newSlug;
+      invalidatePalette();  // model ID changed → palette index is stale
     }
 
     // Save metadata fields
     const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(targetId), { method: 'PUT', body: JSON.stringify(body) });
     if (ok) {
       toast('Model metadata updated', 'success');
+      invalidatePalette();  // display_name may have changed → palette label stale
       if (overlay) closeModal(overlay);
       currentConfig = (await fetchJSON('/admin/config')).data;
       if (targetId !== id) {
@@ -738,6 +783,12 @@ function renderDetailTable(backends) {
           : '<span class="badge badge-gray">(snoozed '+fmtSnoozeDurationRounded(cooldown)+')</span>')
       : '';
     const badge = off ? '<span class="badge badge-gray">off</span>' : snoozeBadge;
+    const circuitBadge = b.circuit_open
+      ? '<span class="badge badge-red" title="Circuit open — excluded from routing until backoff expires">circuit '+(b.circuit_open_remaining_s ? Math.ceil(b.circuit_open_remaining_s)+'s' : '')+'</span>'
+      : '';
+    const warmChip = b.warm
+      ? '<span class="badge badge-green" title="Warm prompt-cache fingerprint(s) on this backend">warm '+(b.warm_hit_rate != null ? Math.round(b.warm_hit_rate*100)+'%' : '')+'</span>'
+      : '';
     const up = b.success_rate != null
       ? '<span class="badge '+(b.success_rate >= 95 ? 'badge-green' : b.success_rate >= 80 ? 'badge-yellow' : 'badge-red')+'">'+b.success_rate+'%</span>'
       : '—';
@@ -750,13 +801,14 @@ function renderDetailTable(backends) {
 
     return '<tr data-tier-row draggable="true" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-priority="'+tierNum+'"'
       + ' style="--tc:'+tc.cssVar+';--shade:'+shade+';--tcbg:'+rowBg+';'+rowOpacity+'"'
-      + ' ondragstart="detailRowDragStart(event)" ondragover="detailRowDragOver(event)" ondrop="detailRowDrop(event)" ondragend="detailRowDragEnd(event)">'
-      + '<td class="grab-cell" title="Drag to reorder">⋮⋮</td>'
+      + '><td class="grab-cell" title="Drag to reorder">⋮⋮</td>'
       + '<td class="tier-num">'+tierNum+'</td>'
       + '<td><span class="routing-dot '+(isSnoozed?'snoozed':'')+'" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" title="'+(isSnoozed?'Click to manage snooze':'Click to snooze')+'"></span>'
         + providerAvatar(b.provider, 20, (b.provider_avatar || ''))
-        + '<code style="color:var(--shade)">'+esc(b.provider)+'</code>:<code>'+esc(b.backend_model)+'</code> '+badge
-        + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-action="editProviderPricing(this.dataset.provider, this.dataset.model)" title="Edit pricing">$</button></td>'
+        + '<code style="color:var(--shade)">'+esc(b.provider)+'</code>:<code>'+esc(b.backend_model)+'</code> '+badge+circuitBadge+warmChip
+        + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-action="editProviderPricing(this.dataset.provider, this.dataset.model)" title="Edit pricing">$</button>'
+        + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-action="editBackendRow(this.dataset.provider, this.dataset.model)" title="Edit backend settings">⚙</button>'
+        + ' <button class="icon-btn btn-sm" data-provider="'+escAttr(b.provider)+'" data-model="'+escAttr(b.backend_model)+'" data-action="toggleBackendEnabled(this.dataset.provider, this.dataset.model, this)" title="'+(off?'Enable backend':'Disable backend')+'">'+(off?'⏻':'⏻')+'</button></td>'
       + '<td>'+(b.context_length ? fmtTokens(b.context_length) : '—')+'</td>'
       + '<td>'+(b.max_output_tokens ? fmtTokens(b.max_output_tokens) : '—')+'</td>'
       + '<td>'+cacheBadge(b)+'</td>'
@@ -820,21 +872,185 @@ async function saveProviderPricing(provider, backendModel, overlay) {
   }
 }
 
-function detailRowDragStart(ev) {
-  _detailDragProvider = ev.currentTarget.dataset.provider;
-  _detailDragModel = ev.currentTarget.dataset.model;
+// ---------- backend edit (F14) ----------
+function editBackendRow(provider, backendModel) {
+  const cfgModel = currentConfig && currentConfig.models.find(m => m.id === modelDetailState.id);
+  if (!cfgModel) return;
+  const b = (cfgModel.backends || []).find(x => x.provider === provider && x.model === backendModel);
+  if (!b) { toast('Backend not found', 'error'); return; }
+  const overlay = openModal({
+    title: 'Backend — ' + provider + ':' + backendModel,
+    bodyHtml:
+      '<p class="modal-sub">Settings for this backend assignment.</p>' +
+      '<div class="field-group">' +
+        '<div class="field"><label class="field-label" for="be-provider">Provider</label>' +
+          '<input type="text" id="be-provider" value="' + esc(b.provider) + '" disabled></div>' +
+        '<div class="field"><label class="field-label" for="be-model">Upstream Model</label>' +
+          '<input type="text" id="be-model" value="' + esc(b.model) + '"></div>' +
+        '<div class="hstack">' +
+          '<div class="field" style="flex:1"><label class="field-label" for="be-context">Context Length</label>' +
+            '<input type="number" id="be-context" value="' + (b.context_length || '') + '" placeholder="inherit"></div>' +
+          '<div class="field" style="flex:1"><label class="field-label" for="be-maxout">Max Output Tokens</label>' +
+            '<input type="number" id="be-maxout" value="' + (b.max_output_tokens || '') + '" placeholder="inherit"></div>' +
+        '</div>' +
+        '<div class="field"><label class="field-label" for="be-cache">Prompt Cache</label>' +
+          '<select id="be-cache">' +
+            '<option value=""' + (b.cache_supported == null ? ' selected' : '') + '>Auto-detect</option>' +
+            '<option value="true"' + (b.cache_supported === true ? ' selected' : '') + '>Supports prompt caching</option>' +
+            '<option value="false"' + (b.cache_supported === false ? ' selected' : '') + '>No prompt caching</option>' +
+          '</select></div>' +
+        '<div class="hstack">' +
+          '<div class="field" style="flex:1"><label class="field-label" for="be-weight">Load-balance Weight</label>' +
+            '<input type="number" step="0.1" min="0" id="be-weight" value="' + (b.weight || '') + '" placeholder="1.0"></div>' +
+          '<div class="field" style="flex:1" class="field"><label class="field-label" for="be-enabled">Enabled</label>' +
+            '<select id="be-enabled">' +
+              '<option value="true"' + (b.enabled !== false ? ' selected' : '') + '>Yes</option>' +
+              '<option value="false"' + (b.enabled === false ? ' selected' : '') + '>No</option>' +
+            '</select></div>' +
+        '</div>' +
+        '<div class="field-hint">Weight &gt;1 sends proportionally more traffic; 0 drains the backend. Used when backends declare non-uniform weights.</div>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="secondary" data-cancel>Cancel</button>' +
+        '<button class="primary" data-ok>Save</button></div>',
+    onMount: (ov) => {
+      ov.querySelector('[data-cancel]').onclick = () => closeModal(ov);
+      ov.querySelector('[data-ok]').onclick = () => saveBackendRow(provider, backendModel, ov);
+    },
+  });
+}
+
+async function saveBackendRow(provider, backendModel, overlay) {
+  const cfgModel = currentConfig && currentConfig.models.find(m => m.id === modelDetailState.id);
+  if (!cfgModel) return;
+  const idx = cfgModel.backends.findIndex(x => x.provider === provider && x.model === backendModel);
+  if (idx < 0) { toast('Backend not found', 'error'); return; }
+  const body = {
+    model: document.getElementById('be-model').value.trim(),
+    context_length: document.getElementById('be-context').value === '' ? null : parseInt(document.getElementById('be-context').value, 10),
+    max_output_tokens: document.getElementById('be-maxout').value === '' ? null : parseInt(document.getElementById('be-maxout').value, 10),
+    cache_supported: (() => {
+      const v = document.getElementById('be-cache').value;
+      return v === '' ? null : v === 'true';
+    })(),
+    enabled: document.getElementById('be-enabled').value === 'true',
+    weight: document.getElementById('be-weight').value === '' ? null : parseFloat(document.getElementById('be-weight').value),
+  };
+  if (body.weight != null && (isNaN(body.weight) || body.weight < 0)) { toast('Weight must be ≥ 0', 'error'); return; }
+  if (!body.model) { toast('Upstream model is required', 'error'); return; }
+  try {
+    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(modelDetailState.id) + '/backends/' + idx, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+    if (ok) {
+      toast('Backend updated', 'success');
+      closeModal(overlay);
+      currentConfig = (await fetchJSON('/admin/config')).data;
+      await reloadModelDetail();
+    } else {
+      toast('Failed to update backend', 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function toggleBackendEnabled(provider, backendModel, btn) {
+  const cfgModel = currentConfig && currentConfig.models.find(m => m.id === modelDetailState.id);
+  if (!cfgModel) return;
+  const b = cfgModel.backends.find(x => x.provider === provider && x.model === backendModel);
+  if (!b) return;
+  const next = !(b.enabled !== false);
+  try {
+    const { ok } = await fetchJSON('/admin/models/' + encodeURIComponent(modelDetailState.id) + '/backends/' + cfgModel.backends.indexOf(b), {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: next }),
+    });
+    if (ok) {
+      toast(next ? 'Backend enabled' : 'Backend disabled', 'success');
+      currentConfig = (await fetchJSON('/admin/config')).data;
+      await reloadModelDetail();
+    } else {
+      toast('Failed to toggle backend', 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// B8: "Count tokens" — POST /admin/tokens to check whether a request fits
+// within each backend's context window.
+async function countTokensModal() {
+  const id = modelDetailState.id;
+  if (!id) return;
+  const cfgModel = (currentConfig || {}).models?.find(m => m.id === id);
+  const ctx = cfgModel?.context_length;
+  const html =
+    '<div class="field">' +
+      '<label class="field-label" for="tk-messages">Messages (JSON array)</label>' +
+      '<textarea id="tk-messages" rows="6" style="font-family:var(--font-mono);font-size:0.82rem" placeholder=\'[{"role":"user","content":"Hello"}]\'>[{"role":"user","content":"Hello, how are you?"}]</textarea>' +
+      '<div class="field-hint">Paste the messages you plan to send. The tool counts tokens and checks each backend\'s context window.' +
+      (ctx ? ' Model-level context: ' + ctx.toLocaleString() + '.' : '') + '</div>' +
+    '</div>' +
+    '<div id="tk-result" style="margin-top:1rem"></div>' +
+    '<div class="modal-actions">' +
+      '<button class="secondary" data-act="close">Close</button>' +
+      '<button class="primary" data-ok="1">Count</button>' +
+    '</div>';
+  // U1: this was calling openModal with positional args against an object
+  // destructuring signature — an empty modal opened and overlay.querySelector
+  // threw. Use the shared object signature like showConfirm().
+  const overlay = openModal({ title: 'Count Tokens — ' + id, bodyHtml: html, widthClass: 'modal-lg' });
+  overlay.querySelector('[data-act="close"]').onclick = () => closeModal(overlay);
+  overlay.querySelector('[data-ok]').onclick = async () => {
+    const raw = overlay.querySelector('#tk-messages').value.trim();
+    let messages;
+    try { messages = JSON.parse(raw); }
+    catch { toast('Invalid JSON messages', 'error'); return; }
+    const resultEl = overlay.querySelector('#tk-result');
+    resultEl.innerHTML = '<div class="skeleton skeleton-block" style="min-height:60px"></div>';
+    try {
+      const r = await fetch('/admin/tokens', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ model: id, messages }),
+      });
+      const d = await r.json();
+      if (!r.ok) { resultEl.innerHTML = '<div class="empty" style="color:var(--red)">'+esc(d.error||'Failed')+'</div>'; return; }
+      const tokens = d.messages_tokens ?? d.input_tokens ?? 0;
+      const backends = d.backends || [];
+      const summary = '<div class="stat-strip" style="margin-bottom:1rem">' +
+        '<div class="stat-cell"><div class="stat-num">'+tokens.toLocaleString()+'</div><div class="stat-cap">Tokens</div></div>' +
+        '<div class="stat-cell"><div class="stat-num">'+backends.length+'</div><div class="stat-cap">Backends</div></div>' +
+        '<div class="stat-cell"><div class="stat-num">'+backends.filter(b=>b.fits).length+'</div><div class="stat-cap">Fit</div></div>' +
+        '<div class="stat-cell"><div class="stat-num" style="color:'+(backends.every(b=>b.fits)?'var(--green)':'var(--red)')+'">'+(backends.every(b=>b.fits)?'Yes':'No')+'</div><div class="stat-cap">All fit?</div></div>' +
+        '</div>';
+      const rows = backends.map(b => {
+        const fit = b.fits === null ? '<span class="badge badge-gray">unknown ctx</span>' :
+          b.fits ? '<span class="badge badge-green">fits</span>' :
+          '<span class="badge badge-red">too large</span>';
+        const pct = b.context_length ? Math.min(100, (tokens / b.context_length) * 100).toFixed(1)+'%' : '—';
+        return '<div class="provider-row" style="justify-content:space-between">' +
+          '<div class="provider-info"><code>'+esc(b.backend)+'</code>' +
+          (b.context_length ? '<span class="provider-url">ctx '+b.context_length.toLocaleString()+' · '+pct+'</span>' : '') +
+          '</div>'+fit+'</div>';
+      }).join('');
+      resultEl.innerHTML = summary + (rows || '<div class="empty">No enabled backends.</div>');
+    } catch(e) { resultEl.innerHTML = '<div class="empty" style="color:var(--red)">Error: '+esc(e.message)+'</div>'; }
+  };
+}
+
+function detailRowDragStart(ev, row) {
+  _detailDragProvider = row.dataset.provider;
+  _detailDragModel = row.dataset.model;
   ev.dataTransfer.effectAllowed = 'move';
-  ev.currentTarget.style.opacity = '0.5';
+  row.style.opacity = '0.5';
 }
 function detailRowDragOver(ev) {
   ev.preventDefault();
   ev.dataTransfer.dropEffect = 'move';
 }
-function detailRowDrop(ev) {
+function detailRowDrop(ev, row) {
   ev.preventDefault();
-  const targetProvider = ev.currentTarget.dataset.provider;
-  const targetModel = ev.currentTarget.dataset.model;
-  const targetPriority = parseInt(ev.currentTarget.dataset.priority, 10);
+  const targetProvider = row.dataset.provider;
+  const targetModel = row.dataset.model;
+  const targetPriority = parseInt(row.dataset.priority, 10);
 
   if (!_detailDragProvider || !_detailDragModel) return;
   if (_detailDragProvider === targetProvider && _detailDragModel === targetModel) return;
@@ -848,8 +1064,8 @@ function detailRowDrop(ev) {
   draggedBackend.priority = targetPriority;
   saveTierChanges();
 }
-function detailRowDragEnd(ev) {
-  ev.currentTarget.style.opacity = '1';
+function detailRowDragEnd(ev, row) {
+  row.style.opacity = '1';
   _detailDragProvider = null;
   _detailDragModel = null;
 }
@@ -928,11 +1144,12 @@ function addNewTier() {
   tr.style.background = tierBgForTier(newTier);
   tr.style.border = '2px dashed ' + tc.base;
   tr.style.cursor = 'grab';
-  tr.ondragover = function(ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; this.style.opacity = '0.6'; };
-  tr.ondragleave = function(ev) { this.style.opacity = '1'; };
-  tr.ondrop = function(ev) {
+  // CSP-safe: programmatic listeners (inline ondrag* would be blocked).
+  tr.addEventListener('dragover', function(ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; tr.style.opacity = '0.6'; });
+  tr.addEventListener('dragleave', function() { tr.style.opacity = '1'; });
+  tr.addEventListener('drop', function(ev) {
     ev.preventDefault();
-    this.style.opacity = '1';
+    tr.style.opacity = '1';
     if (!_detailDragProvider || !_detailDragModel) return;
     const cm = currentConfig && currentConfig.models.find(m => m.id === modelDetailState.id);
     if (!cm) return;
@@ -940,8 +1157,8 @@ function addNewTier() {
     if (!draggedBackend) return;
     draggedBackend.priority = newTier;
     saveTierChanges();
-  };
-  tr.innerHTML = '<td colspan="14" class="muted" style="text-align:center;padding:14px;color:'+tc.cssVar+';font-size:0.82rem">Drop a provider here to create Tier '+newTier+'</td>';
+  });
+  tr.innerHTML = '<td colspan="15" class="muted" style="text-align:center;padding:14px;color:'+tc.cssVar+';font-size:0.82rem">Drop a provider here to create Tier '+newTier+'</td>';
   el.appendChild(tr);
   toast('New tier '+newTier+' ready — drag a provider into it.', 'info');
 }
@@ -1060,7 +1277,7 @@ function filterProviderModelSuggestions() {
   if (!filtered.length) { list.style.display = 'none'; return; }
   list.style.display = 'block';
   list.innerHTML = filtered.slice(0, 100).map(id =>
-    `<div class="discover-row" data-id="${escAttr(id)}" onmousedown="pickAddBackendModel(this.dataset.id);return false"><code>${esc(id)}</code></div>`
+    `<div class="discover-row" data-id="${escAttr(id)}" data-action="pickAddBackendModel(this.dataset.id)"><code>${esc(id)}</code></div>`
   ).join('');
 }
 

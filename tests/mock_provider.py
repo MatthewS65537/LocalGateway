@@ -33,6 +33,26 @@ def create_mock_app(name: str = "mock") -> FastAPI:
             ],
         })
 
+    @app.post("/v1/embeddings")
+    async def embeddings(request: Request):
+        body = await request.json()
+        model = body.get("model", "")
+        app.state.calls["emb:" + model] += 1
+        if model == "mock-emb-dead":
+            return JSONResponse({"error": {"message": "embeddings exploded"}}, status_code=500)
+        inp = body.get("input", "")
+        n = len(inp) if isinstance(inp, list) else 1
+        tokens = sum(len(x) // 4 for x in inp) if isinstance(inp, list) else max(1, len(inp) // 4)
+        return JSONResponse({
+            "object": "list",
+            "model": model,
+            "data": [
+                {"object": "embedding", "index": i, "embedding": [0.1, 0.2, 0.3]}
+                for i in range(n)
+            ],
+            "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
+        })
+
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
         body = await request.json()
@@ -100,5 +120,35 @@ def create_mock_app(name: str = "mock") -> FastAPI:
             yield b"data: [DONE]\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.post("/v1/responses")
+    async def responses(request: Request):
+        body = await request.json()
+        model = body.get("model", "")
+        stream = body.get("stream", False)
+        app.state.calls["resp:" + model] += 1
+
+        if model == "mock-dead":
+            return JSONResponse({"error": {"message": "model exploded"}}, status_code=500)
+
+        usage = {"input_tokens": 12, "output_tokens": 100}
+
+        if not stream:
+            return JSONResponse({
+                "id": "resp-1",
+                "object": "response",
+                "model": model,
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "hello from " + name}]}],
+                "usage": usage,
+            })
+
+        async def resp_gen():
+            yield f"data: {json.dumps({'type': 'response.created', 'response': {'id': 'resp-1'}})}\n\n".encode()
+            for i in range(5):
+                yield f"data: {json.dumps({'type': 'response.output_text.delta', 'delta': 'chunk'})}\n\n".encode()
+                await asyncio.sleep(0.02)
+            yield f"data: {json.dumps({'type': 'response.completed', 'response': {'usage': usage}})}\n\n".encode()
+
+        return StreamingResponse(resp_gen(), media_type="text/event-stream")
 
     return app

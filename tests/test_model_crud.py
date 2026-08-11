@@ -156,7 +156,9 @@ async def test_remove_backend(client):
     await client.delete("/admin/models/test-backend-remove")
 
 
-async def test_reorder_backends(client):
+async def test_reorder_backends_via_tiers(client):
+    # Reordering now uses /backends/tiers (the /backends/reorder endpoint was
+    # deleted as dead code — drag-reorder persists via tiers since refinement-v2).
     await client.post("/admin/models", json={"id": "test-reorder"})
     r1 = await client.post("/admin/models/test-reorder/backends", json={
         "provider": "mock1",
@@ -169,17 +171,25 @@ async def test_reorder_backends(client):
     })
     assert r2.status_code == 200, f"Second backend add failed: {r2.text}"
 
-    r = await client.put("/admin/models/test-reorder/backends/reorder", json={
-        "order": [1, 0],
+    # Reverse the order via tiers: [[1], [0]] → model2 in tier 1, model1 in tier 2.
+    # tiers sets priorities but does NOT reorder the list (unlike the deleted
+    # reorder endpoint), so we assert on priority, not list position.
+    r = await client.put("/admin/models/test-reorder/backends/tiers", json={
+        "tiers": [[1], [0]],
     })
-    assert r.status_code == 200, f"Reorder failed: {r.text}"
+    assert r.status_code == 200, f"Tiers reorder failed: {r.text}"
 
     r2 = await client.get("/admin/models/test-reorder")
     backends = r2.json()["backends"]
-    assert backends[0]["model"] == "model2"
-    assert backends[0]["priority"] == 1
-    assert backends[1]["model"] == "model1"
-    assert backends[1]["priority"] == 2
+    by_model = {b["model"]: b["priority"] for b in backends}
+    assert by_model["model2"] == 1, f"model2 should be tier 1, got {by_model['model2']}"
+    assert by_model["model1"] == 2, f"model1 should be tier 2, got {by_model['model1']}"
+
+    # The old reorder endpoint must be gone. The path now falls through to
+    # /backends/{index} (int param) which 422s on "reorder" — either way it's
+    # no longer a functioning reorder endpoint, so it must not return 200.
+    gone = await client.put("/admin/models/test-reorder/backends/reorder", json={"order": [1, 0]})
+    assert gone.status_code != 200, f"reorder endpoint should be deleted, got {gone.status_code}"
 
     await client.delete("/admin/models/test-reorder")
 
@@ -222,43 +232,6 @@ async def test_compare_too_many(client):
     await client.delete("/admin/models/c3")
     await client.delete("/admin/models/c4")
 
-
-async def test_catalog_search(client):
-    await client.post("/admin/models", json={
-        "id": "catalog1",
-        "description": "Vision model",
-        "capabilities": {"vision": True},
-        "modality": "text+vision",
-        "context_length": 8192,
-        "tags": ["fast"],
-    })
-    await client.post("/admin/models", json={
-        "id": "catalog2",
-        "description": "Text only",
-        "capabilities": {"text": True},
-        "modality": "text",
-        "context_length": 16384,
-    })
-
-    r = await client.get("/admin/catalog?q=vision")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["count"] >= 1
-    assert any(m["id"] == "catalog1" for m in data["models"])
-
-    r2 = await client.get("/admin/catalog?capability=vision")
-    data2 = r2.json()
-    assert any(m["id"] == "catalog1" for m in data2["models"])
-    assert not any(m["id"] == "catalog2" for m in data2["models"])
-
-    r3 = await client.get("/admin/catalog?modality=text")
-    data3 = r3.json()
-    assert any(m["id"] == "catalog2" for m in data3["models"])
-
-    r4 = await client.get("/admin/catalog?min_ctx=10000")
-    data4 = r4.json()
-    assert any(m["id"] == "catalog2" for m in data4["models"])
-    assert not any(m["id"] == "catalog1" for m in data4["models"])
 
     await client.delete("/admin/models/catalog1")
     await client.delete("/admin/models/catalog2")

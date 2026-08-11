@@ -7,13 +7,45 @@ from typing import AsyncIterator, Union
 
 import httpx
 
-from .config import GatewayConfig, ProviderConfig, PricingEntry
+from .config import GatewayConfig, ProviderConfig, PricingEntry, validated_api_key
 from .ratelimit import ratelimit
-from .sse import StreamAccumulator, StreamUsage, usage_from_dict
+from .sse import StreamAccumulator, StreamUsage, render_event, usage_from_dict
 
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 DEFAULT_IDLE_TIMEOUT = 60.0
+
+# P8: per-provider AsyncClients with their own connection pools, so one slow
+# provider holding long-lived streaming connections can't starve the shared
+# pool used by everyone else. Created lazily on first use; closed on shutdown.
+_per_provider_clients: dict[str, httpx.AsyncClient] = {}
+_POOL_MAX_CONNECTIONS = 20
+_POOL_KEEPALIVE = 8
+
+
+def get_provider_client(provider_id: str) -> httpx.AsyncClient:
+    """Return (creating on first use) an isolated pool for one provider."""
+    client = _per_provider_clients.get(provider_id)
+    if client is None:
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=10.0),
+            limits=httpx.Limits(
+                max_connections=_POOL_MAX_CONNECTIONS,
+                max_keepalive_connections=_POOL_KEEPALIVE,
+            ),
+        )
+        _per_provider_clients[provider_id] = client
+    return client
+
+
+async def close_provider_clients() -> None:
+    """Close all lazily-created per-provider pools (worker shutdown)."""
+    for client in _per_provider_clients.values():
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+    _per_provider_clients.clear()
 
 
 @dataclass
@@ -96,21 +128,30 @@ async def call_provider(
     request_body: dict,
     *,
     stream: bool = False,
+    path: str = "/chat/completions",
 ) -> ProviderResult:
-    url = f"{provider.base_url.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {provider.api_key}",
-        "Content-Type": "application/json",
-    }
-    headers.update(provider.headers)
-
-    body = dict(request_body)
-    body["model"] = backend_model
-    body["stream"] = stream
-
+    url = f"{provider.base_url.rstrip('/')}{path}"
+    # P8: route through the provider's own connection pool so one slow
+    # provider can't starve the shared pool. The shared client (marked
+    # _lg_global_pool by worker.create_app) stays for admin/probe traffic;
+    # callers passing their own client (tests) use it directly.
+    if getattr(client, "_lg_global_pool", False):
+        pclient = get_provider_client(provider.id)
+    else:
+        pclient = client
     t0 = time.monotonic()
     try:
-        resp = await client.post(
+        headers = {
+            "Authorization": f"Bearer {validated_api_key(provider)}",
+            "Content-Type": "application/json",
+        }
+        headers.update(provider.headers)
+
+        body = dict(request_body)
+        body["model"] = backend_model
+        body["stream"] = stream
+
+        resp = await pclient.post(
             url,
             headers=headers,
             json=body,
@@ -208,6 +249,8 @@ async def call_provider_stream(
     provider: ProviderConfig,
     backend_model: str,
     request_body: dict,
+    *,
+    path: str = "/chat/completions",
 ) -> AsyncIterator[StreamEvent]:
     """Stream from a provider, yielding structured events.
 
@@ -215,24 +258,29 @@ async def call_provider_stream(
     - StreamDone: stream completed successfully.
     - StreamFailed: error; `mid_stream=False` means fallback is still possible.
     """
-    url = f"{provider.base_url.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {provider.api_key}",
-        "Content-Type": "application/json",
-    }
-    headers.update(provider.headers)
-
-    body = _inject_stream_options(dict(request_body))
-    body["model"] = backend_model
-    body["stream"] = True
-
+    url = f"{provider.base_url.rstrip('/')}{path}"
     idle = provider.stream_idle_timeout or DEFAULT_IDLE_TIMEOUT
     t0 = time.monotonic()
     acc = StreamAccumulator(start=t0)
     first = False
 
+    if getattr(client, "_lg_global_pool", False):
+        pclient = get_provider_client(provider.id)
+    else:
+        pclient = client
+
     try:
-        async with client.stream(
+        headers = {
+            "Authorization": f"Bearer {validated_api_key(provider)}",
+            "Content-Type": "application/json",
+        }
+        headers.update(provider.headers)
+
+        body = _inject_stream_options(dict(request_body))
+        body["model"] = backend_model
+        body["stream"] = True
+
+        async with pclient.stream(
             "POST",
             url,
             headers=headers,
@@ -282,7 +330,6 @@ async def call_provider_stream(
                 yield StreamChunk(data=chunk)
 
             for ev in acc.finish():
-                from .sse import render_event
                 yield StreamChunk(data=render_event(ev))
 
             final_usage = acc.usage

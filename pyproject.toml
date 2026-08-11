@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "httpx"]
+tokens = ["tiktoken"]  # real tokenizer for input estimates + /admin/tokens
 
 [project.scripts]
 localgateway = "localgateway.main:main"

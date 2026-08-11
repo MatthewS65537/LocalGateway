@@ -45,6 +45,10 @@ async def usage(request: Request):
 async def logs(request: Request):
     return _templates.TemplateResponse("logs.html", {"request": request, "active_page": "logs"})
 
+@router.get("/connections")
+async def connections(request: Request):
+    return _templates.TemplateResponse("connections.html", {"request": request, "active_page": "connections"})
+
 @router.get("/compare/{ids}")
 async def compare(request: Request, ids: str):
     return _templates.TemplateResponse(

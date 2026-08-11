@@ -1,8 +1,16 @@
 // dashboard.js — dashboard page logic
+let _dashHealthTimer = null;
 async function loadDashboard() {
   loadServerStatus();
   loadDashUsage();
   loadHealth();
+  // C8: health + rate-limit panels refresh on a 5s poller (hidden-tab gated).
+  // L1: when the SSE bus is live, tick events trigger instant refreshes and
+  // the poller backs off to 30s as a safety net.
+  if (_dashHealthTimer) clearInterval(_dashHealthTimer);
+  const _dashRefresh = () => { if (!document.hidden) { loadDashUsage(); loadHealth(); } };
+  LGEvents.onTick(_dashRefresh);
+  _dashHealthTimer = LGEvents.registerPoller(_dashRefresh, 5000, 30000);
 }
 async function loadDashUsage() {
   const { ok, data } = await apiFetch('/admin/usage?hours=24', { silent: true });
@@ -29,11 +37,14 @@ async function loadHealth() {
   }
   healthEl.dataset.loaded = '1';
     const stats = data.stats || {};
+    const circuits = (data.circuit && data.circuit.circuits) || {};
     const rows = (data.backends||[]).map(b => {
       const key = b.provider + ':' + b.backend_model;
       const st = stats[key] || {};
+      const circ = circuits[key] || {};
       let badge;
       if (!b.enabled || !b.provider_enabled) badge = '<span class="badge badge-gray">disabled</span>';
+      else if (circ.open) badge = '<span class="badge badge-red" title="'+(circ.last_error ? esc(circ.last_error) : 'Circuit open')+'">circuit '+Math.ceil(circ.open_remaining_s||0)+'s</span>';
       else if (b.cooldown_remaining === -1) badge = '<span class="badge badge-gray">snoozed</span>';
       else if (b.cooldown_remaining > 0) badge = '<span class="badge badge-yellow">rate-limited '+b.cooldown_remaining.toFixed(0)+'s</span>';
       else badge = '<span class="badge badge-green">available</span>';
@@ -43,7 +54,7 @@ async function loadHealth() {
       const errTip = st.last_error ? ' title="'+esc(st.last_error)+'"' : '';
       return '<div class="provider-row"><div class="provider-info">'
         + '<span class="provider-name"><code>'+esc(b.model)+'</code> <span class="muted">via</span> '+esc(b.provider_name)+':'+esc(b.backend_model)+'</span>'
-        + '<div class="provider-url">tier #'+b.priority+' · lat '+lat+' · ttft '+ttft+' · ok '+rate+'</div>'
+        + '<div class="provider-url">tier #'+b.priority+' · lat '+lat+' · ttft '+ttft+' · ok '+rate+(circ.consecutive_failures ? ' · '+circ.consecutive_failures+' fails' : '')+'</div>'
         + '</div><span'+errTip+'>'+badge+'</span></div>';
     }).join('');
     healthEl.innerHTML = rows || '<div class="empty">No providers configured</div>';

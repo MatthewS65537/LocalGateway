@@ -7,6 +7,7 @@ from localgateway import usage
 def _fresh(tmp_path):
     usage._initialized = False
     usage.set_db_path(str(tmp_path / "u.db"))
+    usage.stop_writer()  # force sync writes for deterministic test reads
 
 
 def test_migration_adds_new_columns(tmp_path):
@@ -100,3 +101,28 @@ def test_model_aggregates(tmp_path):
     assert row["tokens"] == 40
     assert row["tps_p50"] == 30.0
     assert row["requests"] == 1
+
+
+def test_tps_percentiles_are_ordered_and_high(tmp_path):
+    """Regression for B1: tps_p90/tps_p99 were inverted (computed with 0.1/0.01,
+    i.e. the slow tail). They must be the *fast* tail, so p99 >= p90 >= p50."""
+    _fresh(tmp_path)
+    # 20 samples with a wide spread of TPS values.
+    for i in range(20):
+        usage.log_request(
+            logical_model="m", provider="p", backend_model="b", success=True,
+            input_tokens=1, output_tokens=1, tps=float(i * 10),  # 0..190
+        )
+    agg = usage.get_model_aggregates(hours=24)["m"]
+    assert agg["tps_p50"] == 95.0
+    # p90 = ~171 (fast tail); the old bug returned ~9 (p10).
+    assert agg["tps_p90"] >= agg["tps_p50"]
+    assert agg["tps_p99"] >= agg["tps_p90"]
+    assert agg["tps_p90"] > 150.0
+    assert agg["tps_p99"] > 180.0
+
+    bp = usage.get_backend_percentiles("m", hours=24)["p:b"]
+    assert bp["tps_p90"] >= bp["tps_p50"]
+    assert bp["tps_p99"] >= bp["tps_p90"]
+    assert bp["tps_p90"] > 150.0
+    assert bp["tps_p99"] > 180.0

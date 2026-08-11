@@ -1,6 +1,6 @@
 // compare.js — side-by-side model comparison
 (async function initCompare() {
-  const ids = (window.__COMPARE_IDS__ || '').toString() || decodeURIComponent(location.pathname.replace(/^\/compare\//, ''));
+  const ids = decodeURIComponent(location.pathname.replace(/^\/compare\//, ''));
   const loading = document.getElementById('compare-loading');
   const errEl = document.getElementById('compare-error');
   const wrap = document.getElementById('compare-wrap');
@@ -32,7 +32,11 @@
       ['Display Name', m => esc(m.display_name || m.id)],
       ['Description', m => esc(m.description || '—')],
       ['Modality', m => esc(m.modality || '—')],
-      ['Context', m => m.context_length ? fmtTokens(m.context_length) : '—'],
+      ['Context', m => {
+        const lo = m.context_min, hi = m.context_max;
+        if (lo != null && hi != null) return lo === hi ? fmtTokens(lo) : fmtTokens(lo) + '–' + fmtTokens(hi);
+        return m.context_length ? fmtTokens(m.context_length) : '—';
+      }],
       ['Max Output', m => m.max_output_tokens ? fmtTokens(m.max_output_tokens) : '—'],
       ['Tags', m => esc((m.tags || []).join(', ') || '—')],
       ['Aliases', m => esc((m.aliases || []).join(', ') || '—')],

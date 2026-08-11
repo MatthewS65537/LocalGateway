@@ -22,6 +22,26 @@ from localgateway.worker import create_app
 from mock_provider import create_mock_app
 
 
+@pytest.fixture(autouse=True)
+def _reset_routing_state():
+    """Clear round-robin and rate-limit state before every test so module
+    singletons don't leak across tests (root cause of test_resolve_alias flakiness).
+    Also stop any lingering background writers from prior tests.
+    """
+    _rr.clear()
+    ratelimit._cooldowns.clear()
+    ratelimit._permanent.clear()
+    # Stop background DB writers that might still be running from a prior test.
+    try:
+        from localgateway import usage as _u, logs as _l, respcache as _rc
+        _u.stop_writer()
+        _l.stop_writer()
+        _rc.stop_writer()
+    except Exception:
+        pass
+    yield
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -153,6 +173,11 @@ def gateway_app(mock_servers, tmp_path):
     app = create_app(str(cfg_path))
     set_db_path(str(db_path))
     logs_mod.set_db_path(str(db_path))
+    # Tests need synchronous writes so db_rows sees rows immediately after a
+    # request. Stop the background writer (started by set_db_path) to force
+    # the sync fallback path. Production uses the background writer.
+    usage_mod.stop_writer()
+    logs_mod.stop_writer()
     return app, db_path
 
 

@@ -4,6 +4,7 @@ import argparse
 
 from .config import load_config, set_config_path
 from . import logs
+from . import respcache
 
 
 def main():
@@ -22,6 +23,7 @@ def main():
 
     set_config_path(args.config)
     logs.set_db_path("data/usage.db")
+    respcache.set_db_path("data/usage.db")
     config = load_config()
     host = args.host or config.server.host
     port = args.port or config.server.port

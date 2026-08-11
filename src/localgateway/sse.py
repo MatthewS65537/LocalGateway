@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 class SSEEvent:
     data: str
     done: bool = False
+    # P7: the original wire block (normalized line endings) this event was
+    # parsed from, including its trailing blank line. When set, render_event()
+    # re-emits it verbatim — preserving event: lines, keep-alive comments and
+    # multi-line data that the old re-serialization dropped.
+    raw: bytes | None = None
 
 
 @dataclass
@@ -64,14 +69,27 @@ class SSEParser:
 
     def feed(self, chunk: bytes) -> list[SSEEvent]:
         if chunk:
+            # Handle a split CRLF/CR at the chunk boundary. If the buffer ends
+            # with '\r', it is either the first half of a CRLF (chunk starts
+            # '\n') or a lone CR — either way it is one line ending, so convert
+            # the buffer's trailing '\r' to '\n'. When the chunk starts with
+            # '\n' it is the CRLF continuation and must be dropped (else we'd
+            # emit two line endings).
+            if self._buf.endswith(b"\r"):
+                self._buf = self._buf[:-1] + b"\n"
+                if chunk.startswith(b"\n"):
+                    chunk = chunk[1:]
+            # Normalise remaining CRLF/CR on the *incoming* chunk only
+            # (O(chunk)) rather than rewriting the whole accumulated buffer
+            # (which was O(buffer) per chunk — quadratic on long CRLF streams).
+            chunk = chunk.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
             self._buf += chunk
-            if b"\r" in self._buf:
-                self._buf = self._buf.replace(b"\r\n", b"\n")
         events: list[SSEEvent] = []
         while b"\n\n" in self._buf:
             raw, self._buf = self._buf.split(b"\n\n", 1)
             ev = self._parse_block(raw)
             if ev is not None:
+                ev.raw = raw + b"\n\n"
                 events.append(ev)
         return events
 
@@ -82,7 +100,10 @@ class SSEParser:
             self._buf = b""
             return None
         raw, self._buf = self._buf, b""
-        return self._parse_block(raw)
+        ev = self._parse_block(raw)
+        if ev is not None:
+            ev.raw = raw.rstrip(b"\n") + b"\n\n"
+        return ev
 
     @staticmethod
     def _parse_block(raw: bytes) -> SSEEvent | None:
@@ -92,7 +113,10 @@ class SSEParser:
             if not line or line.startswith(":"):
                 continue
             if line.startswith("data:"):
-                data_lines.append(line[5:].lstrip(" "))
+                # SSE spec (HTML5 §9.2.4): strip exactly ONE leading U+0020
+                # after the colon. lstrip(" ") strips *all* leading spaces
+                # and corrupts payloads that legitimately begin with a space.
+                data_lines.append(line[5:].removeprefix(" "))
         if not data_lines:
             return None
         data = "\n".join(data_lines)
@@ -100,7 +124,15 @@ class SSEParser:
 
 
 def render_event(ev: SSEEvent) -> bytes:
-    """Serialize an event back to wire format."""
+    """Serialize an event back to wire format.
+
+    P7: when the event carries its original wire block (``raw``), re-emit it
+    verbatim instead of re-serializing — the old path always rebuilt the
+    bytes from ``data:`` lines, dropping ``event:`` lines and keep-alive
+    comments and breaking byte-faithfulness for passthrough traffic.
+    """
+    if ev.raw is not None:
+        return ev.raw
     if ev.done:
         return b"data: [DONE]\n\n"
     return (
@@ -117,7 +149,7 @@ class StreamAccumulator:
         self.saw_done = False
         self._start = start if start is not None else time.monotonic()
         self.ttft_ms: int | None = None
-        self._content_text: list[str] = []
+        self._content_len = 0
         self._first_byte_ms: int | None = None
 
     def feed(self, chunk: bytes) -> list[SSEEvent]:
@@ -136,11 +168,16 @@ class StreamAccumulator:
         return []
 
     def estimated_output_tokens(self) -> int | None:
-        """Rough token estimate from accumulated content (~4 chars/token)."""
-        text = "".join(self._content_text)
-        if not text:
+        """Rough token estimate from accumulated content (~4 chars/token).
+
+        Accumulates the *length* of every content delta (not just the first
+        chunk) so streams that omit a final ``usage`` object still log a
+        faithful estimate. Content may come from ``delta.content`` (normal)
+        or reasoning fields.
+        """
+        if self._content_len <= 0:
             return None
-        return max(1, len(text) // 4)
+        return max(1, self._content_len // 4)
 
     def _observe(self, ev: SSEEvent) -> None:
         if ev.done:
@@ -155,15 +192,19 @@ class StreamAccumulator:
         usage = obj.get("usage")
         if isinstance(usage, dict):
             self.usage = _merge_usage(self.usage, usage_from_dict(usage))
-        if self.ttft_ms is None:
-            choices = obj.get("choices")
-            if isinstance(choices, list) and choices:
-                delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
-                if isinstance(delta, dict):
-                    content = delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning")
-                    if content:
-                        self._content_text.append(content)
+        choices = obj.get("choices")
+        if isinstance(choices, list) and choices:
+            delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+            if isinstance(delta, dict):
+                content = delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning")
+                if content:
+                    if self.ttft_ms is None:
                         self.ttft_ms = int((time.monotonic() - self._start) * 1000)
+                    # Accumulate content length unconditionally (B1):
+                    # providers that omit a final usage object rely on this
+                    # estimate for cost/TPS accounting, and counting only the
+                    # first chunk undercounted by orders of magnitude.
+                    self._content_len += len(content)
 
 
 def _merge_usage(a: StreamUsage, b: StreamUsage) -> StreamUsage:

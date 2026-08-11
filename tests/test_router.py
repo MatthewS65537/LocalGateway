@@ -200,3 +200,34 @@ def test_provider_prefs_from_request():
     assert prefs.allow_fallbacks is False
     assert prefs.sort == "latency"
     assert ProviderPrefs.from_request({}) is None
+
+
+def test_routing_reason_tagged_on_backends():
+    """F1: each SelectedBackend gets a `reason` explaining why it was chosen."""
+    cfg = _config()
+    backends = list(select_backends(cfg, "m"))
+    assert len(backends) >= 2
+    # First (tier-1) backend should have a tier-1 reason.
+    assert backends[0].reason == "tier-1", f"got {backends[0].reason!r}"
+    # All backends should have a non-empty reason.
+    assert all(s.reason for s in backends), "all backends must have a reason"
+
+
+def test_routing_reason_order_pref():
+    from localgateway.router import ProviderPrefs
+    cfg = _config()
+    prefs = ProviderPrefs(order=["c"], allow_fallbacks=False)
+    backends = list(select_backends(cfg, "m", prefs=prefs))
+    assert len(backends) == 1
+    assert backends[0].reason == "order-pref"
+
+
+def test_routing_reason_ratelimited_fallback():
+    cfg = _config()
+    ratelimit.snooze("a", "m1", 300)  # tier-1 backend rate-limited
+    backends = list(select_backends(cfg, "m"))
+    # First should be tier-1 (b), last should be the ratelimited one with fallback reason.
+    assert backends[0].reason == "tier-1"
+    rl = [s for s in backends if s.reason == "ratelimited-fallback"]
+    assert len(rl) >= 1
+    ratelimit.clear()

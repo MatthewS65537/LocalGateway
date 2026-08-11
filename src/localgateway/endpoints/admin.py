@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import time
 
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from ..config import load_config, save_config, GatewayConfig, reload_config, TimeSlot, TimeRoutingConfig
+from ..config import load_config, save_config, GatewayConfig, reload_config, TimeSlot, TimeRoutingConfig, validated_api_key, validate_config
 from ..ratelimit import ratelimit
 from ..usage import (
     log_request,
@@ -24,6 +23,9 @@ from .. import logs
 from .. import stats
 
 router = APIRouter()
+
+# P2: short-lived cache for models_overview's get_model_aggregates call.
+_overview_cache: dict[tuple, tuple[float, dict]] = {}
 
 # Sentinel written by GET /admin/config in place of real API keys. When a
 # full config is round-tripped back via PUT, a provider key equal to this
@@ -43,6 +45,11 @@ MODEL_SETTABLE = {
     "default_params": dict,
     "display_name": str,
     "avatar": str,
+    "probe_interval_s": (float, type(None)),
+    # C1: shipped fields that the granular edit APIs couldn't touch (422
+    # "unknown fields") — only a raw config PUT worked.
+    "cache_responses": bool,
+    "endpoint": str,
 }
 
 BACKEND_SETTABLE = {
@@ -52,6 +59,8 @@ BACKEND_SETTABLE = {
     "context_length": (int, type(None)),
     "max_output_tokens": (int, type(None)),
     "cache_supported": (bool, type(None)),
+    # C1: F8 static weights were unreachable via the per-backend edit modal.
+    "weight": float,
 }
 
 
@@ -85,6 +94,12 @@ async def get_config():
     for p in dump.get("providers", []):
         if p.get("api_key"):
             p["api_key"] = REDACTED_KEY
+    server = dump.get("server") or {}
+    for k in server.get("api_keys", []):
+        if k.get("key"):
+            k["key"] = REDACTED_KEY
+    if server.get("api_key"):
+        server["api_key"] = REDACTED_KEY
     return JSONResponse(dump)
 
 
@@ -100,6 +115,11 @@ async def set_provider_api_key(request: Request):
     if provider is None:
         return JSONResponse({"error": f"Provider '{provider_id}' not found"}, status_code=404)
     value = body.get("api_key")
+    if value == REDACTED_KEY:
+        return JSONResponse(
+            {"error": "refusing to save the redacted placeholder as an API key — enter the real key"},
+            status_code=422,
+        )
     provider.api_key = value if value is not None else ""
     save_config(cfg)
     return JSONResponse({"status": "ok"})
@@ -148,8 +168,27 @@ async def put_config(request: Request):
             existing = current.provider_by_id(p.id)
             if existing is not None:
                 p.api_key = existing.api_key
+            else:
+                return JSONResponse(
+                    {"error": f"refusing to save the redacted placeholder as API key for provider '{p.id}' — enter the real key"},
+                    status_code=422,
+                )
+    # Same preservation for the legacy gateway key and client API keys.
+    if cfg.server.api_key == REDACTED_KEY:
+        cfg.server.api_key = current.server.api_key
+    for k in cfg.server.api_keys:
+        if k.key == REDACTED_KEY:
+            existing = current.api_key_by_id(k.id)
+            if existing is not None:
+                k.key = existing.key
+            else:
+                return JSONResponse(
+                    {"error": f"refusing to save the redacted placeholder as key for API key entry '{k.id}' — enter the real key"},
+                    status_code=422,
+                )
     cfg.version = current.version  # normalize; save_config bumps
     save_config(cfg)
+    _overview_cache.clear()
     return JSONResponse({"status": "ok", "version": cfg.version})
 
 
@@ -159,32 +198,72 @@ async def reload_config_endpoint():
     return JSONResponse({"status": "ok", "config": cfg.model_dump()})
 
 
+@router.post("/admin/config/validate")
+async def validate_config_endpoint(request: Request):
+    """N1: dry-run preflight validation of a candidate config. No write."""
+    body = await request.json()
+    try:
+        cfg = GatewayConfig.model_validate(body)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    issues = validate_config(cfg)
+    return JSONResponse({"issues": issues})
+
+
 @router.get("/admin/usage")
 async def usage_endpoint(hours: int = 24):
     return JSONResponse(get_usage_summary(hours=hours))
 
 
+@router.get("/admin/usage/series")
+async def usage_series(hours: int = 168):
+    """Daily/hourly cost + tokens per provider, for the usage-page chart."""
+    from ..usage import get_daily_series
+    hours = max(1, min(hours, 24 * 365))
+    return JSONResponse(get_daily_series(hours=hours))
+
+
 @router.delete("/admin/usage")
 async def clear_usage():
-    """Clear all usage data from the database."""
-    import sqlite3
-    from pathlib import Path
-    db_path = Path("data/usage.db")
-    if db_path.exists():
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute("DELETE FROM usage")
-        c.execute("DELETE FROM logs")
-        conn.commit()
-        conn.close()
-    return JSONResponse({"status": "ok", "message": "All usage data cleared"})
+    """Clear all usage data from the database.
+
+    B11: previously hardcoded Path("data/usage.db") (ignoring the configured
+    path), left the response cache populated (cached replies kept replaying
+    with zero usage rows to show for them), and never invalidated the TPS map
+    or overview caches, so stats-driven routing and the models page showed
+    ghost data for up to 30-60s. Route through the modules' own clearers and
+    invalidate the caches.
+    """
+    from .. import usage as _usage
+    from .. import logs as _logs
+    from .. import respcache as _respcache
+    cleared = {
+        "usage": _usage.clear_usage(),
+        "logs": _logs.clear_logs(),
+        "cache": _respcache.clear(),
+    }
+    from ..usage import invalidate_tps_map
+    invalidate_tps_map()
+    _overview_cache.clear()
+    return JSONResponse({"status": "ok", "message": "All usage data cleared", "cleared": cleared})
 
 
 @router.get("/admin/models/overview")
 async def models_overview(hours: int = 168):
     """Catalog view: per-model aggregates merged with config metadata."""
     config = load_config()
-    agg = get_model_aggregates(hours=hours)
+    # P2: cache the expensive get_model_aggregates call (2 full SQL aggregations
+    # + a per-model TPS percentile pass over 7 days). 60s TTL keeps the models
+    # page responsive without serving stale data for long.
+    import time as _time
+    now = _time.time()
+    cache_key = ("overview", hours)
+    cached = _overview_cache.get(cache_key)
+    if cached and now - cached[0] < 60.0:
+        agg = cached[1]
+    else:
+        agg = get_model_aggregates(hours=hours)
+        _overview_cache[cache_key] = (now, agg)
     models = []
     for m in config.models:
         active = [
@@ -195,6 +274,12 @@ async def models_overview(hours: int = 168):
         priced = [p for p in prices if p.input or p.output]
         a = agg.get(m.id, {})
         req = a.get("requests", 0)
+        # U3: the Models page reads context_min/context_max for its Context
+        # stat, filter, sort and table column, but the payload only carried the
+        # rarely-set model-level context_length — the whole column showed "—"
+        # and the Min-context filter wiped the catalog. Compute the active
+        # backend range here (mirroring how backend_count is derived).
+        ctx_vals = [b.context_length for b in active if b.context_length]
         models.append({
             "id": m.id,
             "display_name": m.display_name or None,
@@ -203,6 +288,8 @@ async def models_overview(hours: int = 168):
             "modality": m.modality or None,
             "tags": m.tags or [],
             "context_length": m.context_length,
+            "context_min": min(ctx_vals) if ctx_vals else (m.context_length or None),
+            "context_max": max(ctx_vals) if ctx_vals else (m.context_length or None),
             "enabled": m.enabled,
             "backend_count": len(active),
             "requests": req,
@@ -226,12 +313,20 @@ async def model_stats(model_id: str, hours: int = 168, p: str = "p50"):
     pct = PERCENTILES.get(p, 0.5)
     statsp = get_backend_percentiles(model_id, hours=hours, p=pct)
     totals = get_model_totals(model_id, hours=hours)
+    from .. import circuitbreaker
+    circuitbreaker.configure_from_config(config)
+    circuits = circuitbreaker.snapshot()
+    ttl = getattr(config.server, "cache_affinity_ttl_sec", 300) or 300
+    candidate_keys = [f"{b.provider}:{b.model}" for b in model.backends]
+    warmth = stats.warmth_for_backends(candidate_keys, ttl)
     backends = []
     for b in sorted(model.backends, key=lambda x: x.priority):
         provider = config.provider_by_id(b.provider)
         pricing = config.pricing_for(b.provider, b.model)
         key = f"{b.provider}:{b.model}"
         s = statsp.get(key, {})
+        circ = circuits.get(key, {})
+        warm = warmth.get(key)
         backends.append({
             "provider": b.provider,
             "provider_name": (provider.name or provider.id) if provider else b.provider,
@@ -247,6 +342,12 @@ async def model_stats(model_id: str, hours: int = 168, p: str = "p50"):
             "cache_read_price": pricing.cache_read,
             "cache_write_price": pricing.cache_write,
             "cooldown_remaining": round(ratelimit.remaining(b.provider, b.model), 1),
+            "circuit_open": circ.get("open", False),
+            "circuit_failures": circ.get("consecutive_failures", 0),
+            "circuit_open_remaining_s": circ.get("open_remaining_s", 0.0),
+            "warm": bool(warm),
+            "warm_hit_rate": round(warm["last_hit_rate"], 3) if warm else None,
+            "warm_fingerprints": warm["fingerprints"] if warm else 0,
             "requests": s.get("requests", 0),
             "success_rate": s.get("success_rate"),
             "ttft_ms": s.get("ttft_ms"),
@@ -328,71 +429,6 @@ async def models_compare(ids: str = ""):
             ],
         })
     return JSONResponse({"models": results})
-
-
-@router.get("/admin/catalog")
-async def catalog_search(
-    q: str = "",
-    modality: str = "",
-    provider: str = "",
-    capability: str = "",
-    min_ctx: int | None = None,
-    max_in_price: float | None = None,
-):
-    """Search/filter the model catalog."""
-    config = load_config()
-    agg = get_model_aggregates(hours=168)
-    results = []
-    for m in config.models:
-        active = [b for b in m.backends if b.enabled and (p := config.provider_by_id(b.provider)) and p.enabled]
-        prices = [config.pricing_for(b.provider, b.model) for b in active]
-        priced = [p for p in prices if p.input or p.output]
-        a = agg.get(m.id, {})
-        min_input = min((p.input for p in priced), default=None)
-
-        if q:
-            ql = q.lower()
-            alias_hit = any(ql in a.lower() for a in m.aliases)
-            if (
-                ql not in m.id.lower()
-                and ql not in (m.display_name or "").lower()
-                and ql not in m.description.lower()
-                and not alias_hit
-            ):
-                continue
-        if modality and m.modality != modality:
-            continue
-        if provider:
-            if not any(b.provider == provider for b in m.backends):
-                continue
-        if capability and not m.capabilities.get(capability, False):
-            continue
-        if min_ctx and (m.context_length or 0) < min_ctx:
-            continue
-        if max_in_price is not None and (min_input is None or min_input > max_in_price):
-            continue
-
-        results.append({
-            "id": m.id,
-            "display_name": m.display_name or m.id,
-            "description": m.description or None,
-            "context_length": m.context_length,
-            "max_output_tokens": m.max_output_tokens,
-            "modality": m.modality or None,
-            "capabilities": m.capabilities,
-            "tags": m.tags,
-            "aliases": m.aliases,
-            "enabled": m.enabled,
-            "backend_count": len(active),
-            "requests": a.get("requests", 0),
-            "success_rate": round(a.get("successes", 0) / a["requests"] * 100, 1) if a.get("requests") else None,
-            "tokens": a.get("tokens", 0),
-            "cost": a.get("cost", 0.0),
-            "tps_p50": a.get("tps_p50"),
-            "input_price": min_input,
-            "output_price": min((p.output for p in priced), default=None),
-        })
-    return JSONResponse({"models": results, "count": len(results)})
 
 
 @router.get("/admin/models/{model_id}")
@@ -489,27 +525,6 @@ async def delete_model(model_id: str):
     if idx is None:
         return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
     config.models.pop(idx)
-    save_config(config)
-    return JSONResponse({"status": "ok"})
-
-
-@router.put("/admin/models/{model_id}/backends/reorder")
-async def reorder_backends(model_id: str, request: Request):
-    """Reorder backends by setting priority order."""
-    config = load_config()
-    model = config.model_by_id(model_id)
-    if model is None:
-        return JSONResponse({"error": f"Model '{model_id}' not found"}, status_code=404)
-    body = await request.json()
-    order = body.get("order", [])
-    if not isinstance(order, list):
-        return JSONResponse({"error": "order must be a list of backend indices"}, status_code=422)
-    if sorted(order) != list(range(len(model.backends))):
-        return JSONResponse({"error": "order must contain all backend indices exactly once"}, status_code=422)
-    new_backends = [model.backends[i] for i in order]
-    for i, b in enumerate(new_backends):
-        b.priority = i + 1
-    model.backends = new_backends
     save_config(config)
     return JSONResponse({"status": "ok"})
 
@@ -710,11 +725,17 @@ async def health_endpoint():
                 "provider_enabled": provider.enabled if provider else False,
                 "cooldown_remaining": round(ratelimit.remaining(b.provider, b.model), 1),
             })
+    from .. import circuitbreaker
+    circuitbreaker.configure_from_config(config)
     return JSONResponse({
         "providers": providers,
         "backends": backends,
         "rate_limits": ratelimit.snapshot(),
         "stats": stats.snapshot(),
+        "circuit": {
+            "enabled": bool(getattr(config.server, "circuit_breaker_enabled", False)),
+            "circuits": circuitbreaker.snapshot(),
+        },
     })
 
 
@@ -741,6 +762,267 @@ async def clear_warmth():
     """Reset the warmth registry (all fingerprints become cold)."""
     stats.clear_warmth()
     return JSONResponse({"status": "ok"})
+
+
+# ---------- circuit breaker ----------
+
+@router.get("/admin/circuit")
+async def circuit_snapshot():
+    """Circuit breaker state per backend (consecutive failures, open/remaining)."""
+    from .. import circuitbreaker
+    circuitbreaker.configure_from_config(load_config())
+    return JSONResponse({
+        "enabled": bool(getattr(load_config().server, "circuit_breaker_enabled", False)),
+        "circuits": circuitbreaker.snapshot(),
+    })
+
+
+@router.post("/admin/alerts/test")
+async def alert_test():
+    """Send a test alert to the configured webhook (validates URL + delivery)."""
+    from .. import alerts
+    cfg = load_config()
+    if not cfg.server.alert_webhook_url:
+        return JSONResponse({"ok": False, "error": "No alert webhook URL configured"}, status_code=422)
+    delivered = alerts.send("test", "LocalGateway test alert", {"test": True})
+    if not delivered:
+        return JSONResponse({"ok": False, "error": "No alert webhook URL configured"}, status_code=422)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/admin/anomalies/ack")
+async def ack_anomaly_endpoint(request: Request):
+    """N2: dismiss a cost anomaly banner. Body: {id: int}."""
+    from .. import usage as _usage
+    body = await request.json()
+    aid = body.get("id")
+    if aid is None:
+        return JSONResponse({"error": "id required"}, status_code=422)
+    ok = _usage.ack_anomaly(int(aid))
+    return JSONResponse({"ok": ok})
+
+
+@router.post("/admin/circuit/reset")
+async def circuit_reset(request: Request):
+    """Manually close circuits. Body: {} (all) or {provider, model} (one)."""
+    from .. import circuitbreaker
+    body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+    cleared = circuitbreaker.reset(body.get("provider"), body.get("model"))
+    return JSONResponse({"status": "ok", "cleared": cleared})
+
+
+# ---------- token counting ----------
+
+@router.post("/admin/tokens")
+async def count_tokens(request: Request):
+    """Estimate token counts for a request body (messages or embeddings input).
+
+    Body: {model?, messages?} or {model?, input?}. Uses tiktoken when
+    installed (server.tokenizer=auto), else the chars/4 heuristic.
+    """
+    from .. import tokenizer
+    body = await request.json()
+    config = load_config()
+    mode = getattr(config.server, "tokenizer", "auto") or "auto"
+    result: dict = {"tokenizer": tokenizer.tokenizer_name(mode)}
+
+    messages = body.get("messages")
+    if messages is not None:
+        n = tokenizer.count_messages(messages, mode=mode)
+        result["messages_tokens"] = n
+        # Context-fit check against the requested model's backends.
+        model_id = body.get("model")
+        if model_id and n is not None:
+            model = config.model_by_id(model_id)
+            if model is not None:
+                fits = []
+                for b in model.backends:
+                    if not b.enabled:
+                        continue
+                    if b.context_length is None:
+                        fits.append({"backend": f"{b.provider}:{b.model}", "fits": None})
+                    else:
+                        fits.append({
+                            "backend": f"{b.provider}:{b.model}",
+                            "fits": b.context_length >= n,
+                            "context_length": b.context_length,
+                        })
+                result["backends"] = fits
+    inp = body.get("input")
+    if inp is not None:
+        result["input_tokens"] = tokenizer.count_embedding_input(inp, mode=mode)
+    if "messages_tokens" not in result and "input_tokens" not in result:
+        return JSONResponse({"error": "provide messages or input"}, status_code=422)
+    return JSONResponse(result)
+
+
+# ---------- usage export ----------
+
+@router.get("/admin/usage/export")
+async def usage_export(hours: int = 720, format: str = "json", include_probes: bool = False):
+    """Download raw usage rows as JSON or CSV. Probes excluded by default."""
+    from ..usage import export_rows, EXPORT_COLUMNS
+    hours = max(1, min(hours, 24 * 365))
+    rows = export_rows(hours=hours, include_probes=include_probes)
+    if format == "csv":
+        import csv
+        import io
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=EXPORT_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="localgateway-usage-{hours}h.csv"'},
+        )
+    return JSONResponse({"hours": hours, "count": len(rows), "rows": rows})
+
+
+# ---------- response cache (C3: admin surface for respcache) ----------
+
+@router.get("/admin/cache")
+async def response_cache_stats():
+    """Response-cache stats for the Settings page (entries, hits)."""
+    from .. import respcache
+    st = respcache.stats()
+    st["enabled"] = bool(getattr(load_config().server, "response_cache_enabled", False))
+    return JSONResponse(st)
+
+
+@router.delete("/admin/cache")
+async def response_cache_clear():
+    """Drop all cached responses (with usage/log cleanup consistency)."""
+    from .. import respcache
+    from ..usage import invalidate_tps_map
+    n = respcache.clear()
+    invalidate_tps_map()
+    return JSONResponse({"status": "ok", "cleared": n})
+
+
+# ---------- config backups ----------
+
+@router.get("/admin/backups")
+async def list_backups():
+    """List config backup files (newest first) with size/mtime."""
+    from ..config import _backup_paths, _config_path
+    out = []
+    for i, p in enumerate(_backup_paths()):
+        if not p.exists():
+            continue
+        st = p.stat()
+        out.append({
+            "slot": i,
+            "path": str(p),
+            "name": p.name,
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "current": False,
+        })
+    if _config_path.exists():
+        st = _config_path.stat()
+        out.insert(0, {
+            "slot": -1,
+            "path": str(_config_path),
+            "name": _config_path.name,
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "current": True,
+        })
+    return JSONResponse({"backups": out})
+
+
+@router.post("/admin/backups/restore")
+async def restore_backup(request: Request):
+    """Restore config.json from a backup slot. Validates before swapping."""
+    import json as _json
+    import os
+    import shutil
+    from ..config import _backup_at, _config_path, _parse, reload_config
+
+    body = await request.json()
+    try:
+        slot = int(body.get("slot"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "slot (int) is required"}, status_code=422)
+    backup = _backup_at(slot)
+    if not backup.exists():
+        return JSONResponse({"error": f"Backup slot {slot} does not exist"}, status_code=404)
+    try:
+        _parse(_json.loads(backup.read_text(encoding="utf-8")))
+    except Exception as e:
+        return JSONResponse({"error": f"Backup is not a valid config: {e}"}, status_code=422)
+    # B10: the pre-restore config must be preserved as the newest .bak —
+    # the comment claimed "Normal save rotation preserves the pre-restore
+    # config as the newest .bak" but the raw copy2+replace never invoked
+    # _rotate_backups, so a misclick on "restore" was unrecoverable. Mirror
+    # save_config's rotation, then swap. Stage the restore source FIRST —
+    # rotating + copying the current config into slot 0 must not clobber the
+    # backup we are about to read back.
+    from ..config import _rotate_backups, _backup_path
+    shutil.copy2(str(backup), str(_config_path) + ".restore-tmp")
+    _rotate_backups()
+    shutil.copy2(str(_config_path), str(_backup_path()))
+    os.replace(str(_config_path) + ".restore-tmp", str(_config_path))
+    cfg = reload_config()
+    logs.warn(f"config restored from backup slot {slot} ({backup.name})", provider="config")
+    return JSONResponse({"status": "ok", "restored_from": str(backup), "version": cfg.version})
+
+
+# ---------- API key governance ----------
+
+@router.post("/admin/config/server-key/{key_id}/reveal")
+async def reveal_server_api_key(key_id: str):
+    """Reveal a client API key's secret (POST-only, like provider keys)."""
+    cfg = load_config()
+    if key_id == "legacy":
+        if not cfg.server.api_key:
+            return JSONResponse({"error": "No legacy api_key set"}, status_code=404)
+        return JSONResponse({"id": "legacy", "key": cfg.server.api_key})
+    k = cfg.api_key_by_id(key_id)
+    if k is None:
+        return JSONResponse({"error": f"Key '{key_id}' not found"}, status_code=404)
+    return JSONResponse({"id": key_id, "key": k.key})
+
+
+@router.get("/admin/keys/spend")
+async def keys_spend():
+    """Per-key limits (from config) merged with live spend + RPM usage."""
+    from .. import clientquota
+    from ..usage import get_all_key_spend
+    cfg = load_config()
+    spend = get_all_key_spend()
+    keys = []
+    configured_ids = set()
+    for k in cfg.server.api_keys:
+        configured_ids.add(k.id)
+        s = spend.get(k.id, {"day_cost": 0.0, "day_requests": 0, "month_cost": 0.0, "month_requests": 0})
+        keys.append({
+            "id": k.id,
+            "label": k.label,
+            "enabled": k.enabled,
+            "rpm": k.rpm,
+            "daily_budget_usd": k.daily_budget_usd,
+            "monthly_budget_usd": k.monthly_budget_usd,
+            "model_allowlist": k.model_allowlist,
+            "current_rpm": clientquota.current_rpm(k.id),
+            **s,
+        })
+    if cfg.server.api_key:
+        s = spend.get("default", {"day_cost": 0.0, "day_requests": 0, "month_cost": 0.0, "month_requests": 0})
+        keys.append({
+            "id": "default", "label": "Legacy default key", "enabled": True,
+            "rpm": None, "daily_budget_usd": None, "monthly_budget_usd": None,
+            "model_allowlist": [], "current_rpm": 0, **s,
+        })
+    # Keys seen in usage but no longer configured.
+    for kid, s in spend.items():
+        if kid and kid not in configured_ids and not (kid == "default" and cfg.server.api_key):
+            keys.append({"id": kid, "label": "(deleted key)", "enabled": False,
+                         "rpm": None, "daily_budget_usd": None, "monthly_budget_usd": None,
+                         "model_allowlist": [], "current_rpm": 0, **s})
+    return JSONResponse({"keys": keys})
 
 
 @router.post("/admin/backends/snooze")
@@ -875,7 +1157,11 @@ async def discover_provider_models(provider_id: str):
         return JSONResponse({"error": f"Provider '{provider_id}' not found"}, status_code=404)
 
     url = f"{provider.base_url.rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {provider.api_key}"}
+    try:
+        key = validated_api_key(provider)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    headers = {"Authorization": f"Bearer {key}"}
     headers.update(provider.headers)
 
     t0 = time.monotonic()
@@ -909,15 +1195,17 @@ async def discover_provider_models(provider_id: str):
 
 @router.post("/admin/backends/test")
 async def test_backend(request: Request):
-    """Send a minimal probe request to a backend and report the result."""
-    from ..sse import StreamAccumulator
-    from ..streaming import compute_tps
-    from ..usage import get_backend_percentiles
+    """Send a minimal probe request to a backend and report the result.
+
+    Probe mechanics (body, implausible-TPS rejection, p50 fallback) live in
+    prober.py — this endpoint is the manual, on-demand wrapper.
+    """
+    from .. import prober
 
     body = await request.json()
     provider_id = body.get("provider", "")
     model = body.get("model", "")
-    stream = bool(body.get("stream", False))
+    stream = bool(body.get("stream", True))
     logical_model = body.get("logical_model", "")
     if not provider_id or not model:
         return JSONResponse({"error": "provider and model are required"}, status_code=422)
@@ -931,84 +1219,10 @@ async def test_backend(request: Request):
         return JSONResponse({"ok": False, "skipped": True, "error": "backend is snoozed"}, status_code=200)
 
     max_tokens = config.server.probe_max_tokens or 64
-    probe_body = {
-        "model": model,
-        "messages": [{"role": "user", "content": "Write a detailed paragraph explaining how a rainbow forms. Be thorough and specific."}],
-        "max_tokens": max_tokens,
-        "stream": stream,
-        "stream_options": {"include_usage": True},
-    }
-    url = f"{provider.base_url.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {provider.api_key}",
-        "Content-Type": "application/json",
-    }
-    headers.update(provider.headers)
-
-    async def single_probe():
-        t0 = time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                if stream:
-                    acc = StreamAccumulator(start=t0)
-                    async with client.stream("POST", url, headers=headers, json=probe_body) as resp:
-                        if resp.status_code != 200:
-                            text = b""
-                            async for c in resp.aiter_bytes():
-                                text += c
-                            latency_ms = int((time.monotonic() - t0) * 1000)
-                            return {"ok": False, "status_code": resp.status_code, "error": text.decode("utf-8", errors="replace")[:500], "latency_ms": latency_ms}
-                        async for c in resp.aiter_bytes():
-                            if c:
-                                acc.feed(c)
-                        for ev in acc.finish():
-                            pass
-                    latency_ms = int((time.monotonic() - t0) * 1000)
-                    out_tok = acc.usage.output_tokens or acc.estimated_output_tokens()
-                    in_tok = acc.usage.input_tokens
-                    ttft_ms = acc.ttft_ms or acc._first_byte_ms
-                    tps = compute_tps(out_tok, latency_ms, ttft_ms)
-                    return {"ok": True, "latency_ms": latency_ms, "ttft_ms": ttft_ms, "tps": tps, "output_tokens": out_tok, "input_tokens": in_tok, "stream": True}
-                else:
-                    resp = await client.post(url, headers=headers, json=probe_body)
-                    latency_ms = int((time.monotonic() - t0) * 1000)
-                    if resp.status_code != 200:
-                        return {"ok": False, "status_code": resp.status_code, "error": resp.text[:500], "latency_ms": latency_ms}
-                    from ..provider import _extract_usage
-                    u = _extract_usage(resp.content)
-                    out_tok = u.output_tokens
-                    in_tok = u.input_tokens
-                    ttft_ms = None
-                    tps = compute_tps(out_tok, latency_ms, ttft_ms)
-                    return {"ok": True, "latency_ms": latency_ms, "ttft_ms": ttft_ms, "tps": tps, "output_tokens": out_tok, "input_tokens": in_tok}
-        except Exception as e:
-            return {"ok": False, "error": str(e)[:500], "latency_ms": int((time.monotonic() - t0) * 1000)}
-
-    MAX_REPROBE = 3
-    IMPLAUSIBLE_TPS = 2000
-    result = None
-    attempts = 0
-    implausible_tps_values = []
-
-    for attempt in range(MAX_REPROBE):
-        result = await single_probe()
-        if not result.get("ok"):
-            break
-        tps = result.get("tps")
-        if tps is None or tps < IMPLAUSIBLE_TPS:
-            break
-        implausible_tps_values.append(tps)
-        if attempt < MAX_REPROBE - 1:
-            await asyncio.sleep(0.5)
-
-    if result and result.get("ok") and result.get("tps", 0) >= IMPLAUSIBLE_TPS:
-        key = f"{provider_id}:{model}"
-        hist = get_backend_percentiles(logical_model, hours=168, p=0.5) if logical_model else {}
-        p50_tps = hist.get(key, {}).get("tps_p50")
-        if p50_tps is not None:
-            result["tps"] = p50_tps
-            result["tps_source"] = "p50_historical"
-        implausible_tps_values = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        result = await prober.probe_with_reprobe(
+            client, provider, model, logical_model or None, max_tokens, stream=stream
+        )
 
     if result and result.get("ok") and logical_model:
         latency_ms = result.get("latency_ms")
@@ -1038,9 +1252,11 @@ async def logs_endpoint(
     level: str | None = None,
     search: str | None = None,
     since_id: int | None = None,
+    request_id: str | None = None,
 ):
     return JSONResponse({
-        "logs": logs.get_logs(limit=limit, level=level, search=search, since_id=since_id)
+        "logs": logs.get_logs(limit=limit, level=level, search=search,
+                              since_id=since_id, request_id=request_id)
     })
 
 

@@ -33,6 +33,12 @@ _lock = threading.Lock()
 _stats: dict[str, _BackendStats] = {}
 # cache_key -> { backend_key -> WarmthEntry }
 _warmth: dict[str, dict[str, WarmthEntry]] = {}
+# P5: the warmth registry grew unboundedly — cache.fingerprint rotates every
+# conversation turn, so every turn minted a never-again-queried key that was
+# never swept, and warmth_for_backends() (which scans ALL buckets per call)
+# got steadily slower. Bound total entries and globally sweep expired ones.
+_WARMTH_MAX_KEYS = 2000
+_WARMTH_MAX_ENTRIES = 20000
 
 
 def _key(provider_id: str, backend_model: str) -> str:
@@ -135,6 +141,16 @@ def record_cache_activity(
             entry.miss_count += 1
         total = entry.hit_count + entry.miss_count
         entry.last_hit_rate = (entry.hit_count / total) if total else 0.0
+        # P5: capacity bounds — evict the least-recently-seen bucket(s) when
+        # the registry exceeds its limits so memory stays flat on long-running
+        # gateways with many distinct conversation fingerprints.
+        if len(_warmth) > _WARMTH_MAX_KEYS or (
+            sum(len(b) for b in _warmth.values()) > _WARMTH_MAX_ENTRIES
+        ):
+            oldest_key = min(_warmth, key=lambda k: max(
+                (e.last_seen_ts for e in _warmth[k].values()), default=0.0
+            ))
+            del _warmth[oldest_key]
 
 
 def warm_backends_for(
@@ -194,6 +210,37 @@ def snapshot() -> dict[str, dict]:
                 "last_success_ts": st.last_success_ts,
                 "in_flight": st.in_flight,
             }
+        return out
+
+
+def warmth_for_backends(candidate_keys: list[str], ttl_sec: float) -> dict[str, dict]:
+    """Per-backend warmth summary across ALL fingerprints (not one cache key).
+
+    Returns backend_key -> {warm, last_hit_rate, last_seen_ts, fingerprints}
+    for backends with any non-expired warmth entry. Powers the per-backend
+    "warm" chip on the model detail page.
+    """
+    if not candidate_keys:
+        return {}
+    now = time.time()
+    cand = set(candidate_keys)
+    with _lock:
+        out: dict[str, dict] = {}
+        for bucket in _warmth.values():
+            for bk, e in bucket.items():
+                if bk not in cand:
+                    continue
+                if now - e.last_seen_ts > ttl_sec:
+                    continue
+                entry = out.get(bk)
+                if entry is None:
+                    entry = {"warm": False, "last_hit_rate": 0.0, "last_seen_ts": 0.0, "fingerprints": 0}
+                    out[bk] = entry
+                entry["warm"] = True
+                entry["fingerprints"] += 1
+                if e.last_seen_ts > entry["last_seen_ts"]:
+                    entry["last_seen_ts"] = e.last_seen_ts
+                    entry["last_hit_rate"] = e.last_hit_rate
         return out
 
 

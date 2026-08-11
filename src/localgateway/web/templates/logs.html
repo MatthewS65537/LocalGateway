@@ -40,13 +40,18 @@
     <div class="log-filters">
       <select id="log-level" data-change="loadLogs()">
         <option value="">All levels</option>
+        <option value="DEBUG">DEBUG</option>
         <option value="INFO">INFO</option>
         <option value="WARN">WARN</option>
         <option value="ERROR">ERROR</option>
       </select>
       <input type="text" id="log-search" placeholder="Search message, model, provider…" data-input="debouncedLoadLogs()">
+      <input type="text" id="log-request-id" placeholder="Trace: request id…" data-input="debouncedLoadLogs()" title="Filter to one request's full fallback timeline">
     </div>
     <div class="log-list" id="log-list"><div class="skeleton skeleton-block" style="min-height:120px"></div></div>
+    <div class="hstack" style="margin-top:10px">
+      <button class="secondary btn-sm" data-action="loadOlderLogs()">⬆ Load older</button>
+    </div>
   </div>
 </section>
 {% endblock %}

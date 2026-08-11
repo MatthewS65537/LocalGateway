@@ -6,16 +6,30 @@ import threading
 import time
 from pathlib import Path
 
+from .dbwriter import BackgroundWriter
+
 _db_path: Path = Path("data/usage.db")
 _lock = threading.Lock()
 _initialized = False
+_writer: BackgroundWriter | None = None
 
 LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
 
 
 def set_db_path(path: str | Path) -> None:
-    global _db_path
+    global _db_path, _writer
     _db_path = Path(path)
+    if _writer is not None:
+        _writer.stop()
+    _writer = BackgroundWriter(_db_path)
+    _writer.start()
+
+
+def stop_writer() -> None:
+    global _writer
+    if _writer is not None:
+        _writer.stop()
+        _writer = None
 
 
 def _connect() -> sqlite3.Connection:
@@ -64,7 +78,16 @@ def log(
     **meta,
 ) -> None:
     _init()
-    meta_str = json.dumps(meta) if meta else None
+    # Compact JSON (no spaces) so the request_id LIKE filter in get_logs matches
+    # deterministically: %"request_id":"<id>"%.
+    meta_str = json.dumps(meta, separators=(",", ":")) if meta else None
+    # P1: enqueue to the background writer so logging never blocks the event loop.
+    if _writer is not None:
+        _writer.enqueue(
+            "INSERT INTO logs (ts, level, message, model, provider, status_code, latency_ms, meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (time.time(), level.upper(), message, model, provider, status_code, latency_ms, meta_str),
+        )
+        return
     with _lock:
         with _connect() as conn:
             conn.execute(
@@ -97,6 +120,7 @@ def get_logs(
     level: str | None = None,
     search: str | None = None,
     since_id: int | None = None,
+    request_id: str | None = None,
 ) -> list[dict]:
     _init()
     query = "SELECT * FROM logs"
@@ -109,6 +133,12 @@ def get_logs(
         conditions.append("(message LIKE ? OR model LIKE ? OR provider LIKE ?)")
         like = f"%{search}%"
         params.extend([like, like, like])
+    if request_id:
+        # F2: filter by request_id stored in the meta JSON column. Uses LIKE
+        # since request_id is embedded in a JSON blob (10k-line retention makes
+        # this cheap; a dedicated column could be added if scale demands).
+        conditions.append("meta LIKE ?")
+        params.append(f'%"request_id":"{request_id}"%')
     if since_id is not None:
         conditions.append("id > ?")
         params.append(since_id)
