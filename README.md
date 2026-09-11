@@ -1,6 +1,6 @@
 # LocalGateway
 
-A local OpenAI-compatible token gateway that collates many provider subscriptions behind logical model IDs with priority-tier failover and weighted load balancing. Think of it as a small, self-hosted OpenRouter that runs entirely on your machine.
+A local OpenAI-compatible token gateway that collates many provider subscriptions behind logical model IDs with priority-tier failover and weighted load balancing. Think of it as a small, self-hosted OpenRouter that runs entirely on your machine. Good for people who don't want to be stopped by those pesky rate limits!
 
 - **One logical model, many backends.** Map a single model ID (e.g. `glm-5.2`) to several upstream providers with per-backend priority. Tier 1 backends are load-balanced as a group; tier 2+ act as failover tiers.
 - **OpenAI-compatible.** Exposes `/v1/chat/completions` and `/v1/models` (also mirrored at `/api/v1/...`), so any client that speaks the OpenAI API can point at it.
@@ -66,7 +66,7 @@ python3 -m pip install -e ".[tokens]"
    cp config.example.json config.json
    ```
 
-   Edit `config.json` and replace `REPLACE_WITH_YOUR_API_KEY` with a real key. See [Configuration](#configuration) for the full schema.
+   Edit `config.json` and replace `REPLACE_WITH_YOUR_API_KEY` with a real key. See [Configuration](#configuration) for the full schema. **You will also be able to edit this in the UI.** Feel free to hold off on setting up at this step if you prefer a graphical interface.
 
 2. Start the server (runs the supervisor + worker on port 3456 by default):
 
